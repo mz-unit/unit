@@ -1,3 +1,3 @@
-package wallet
+package services
 
 type WalletManager struct {}
