@@ -13,8 +13,8 @@ import (
 
 type ApiService struct {
 	server    *http.Server
-	ks        stores.KeyStore
-	as        stores.AccountStore
+	keys      stores.KeyStore
+	accounts  stores.AccountStore
 	srcChains []string
 	dstChains []string
 	assets    []string
@@ -22,8 +22,8 @@ type ApiService struct {
 
 func NewApiService(ks stores.KeyStore, as stores.AccountStore, srcChains []string, dstChains []string, assets []string) *ApiService {
 	a := &ApiService{
-		ks:        ks,
-		as:        as,
+		keys:      ks,
+		accounts:  as,
 		srcChains: srcChains,
 		dstChains: dstChains,
 		assets:    assets,
@@ -93,7 +93,7 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := a.as.GetByID(ctx, account.ID())
+	existing, err := a.accounts.Get(ctx, account.ID)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -110,7 +110,7 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	depositAddr, err := a.ks.CreateAccount(ctx)
+	depositAddr, err := a.keys.CreateAccount(ctx)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
@@ -122,7 +122,7 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = a.as.Insert(ctx, *account)
+	err = a.accounts.Insert(ctx, *account)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return

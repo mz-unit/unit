@@ -8,10 +8,11 @@ import (
 )
 
 type Account struct {
-	Chain       string
-	DstChain    string
-	DstAddr     string
-	DepositAddr *string
+	ID          string  `json:"id"`
+	Chain       string  `json:"chain"`
+	DstChain    string  `json:"dst_chain"`
+	DstAddr     string  `json:"dst_addr"`
+	DepositAddr *string `json:"deposit_addr"`
 }
 
 func NewAccount(chain string, dstChain string, dstAddr string) (*Account, error) {
@@ -20,15 +21,15 @@ func NewAccount(chain string, dstChain string, dstAddr string) (*Account, error)
 		return nil, err
 	}
 
+	c := strings.ToLower(chain)
+	dc := strings.ToLower(dstChain)
+
 	return &Account{
-		Chain:    strings.ToLower(chain),
-		DstChain: strings.ToLower(dstChain),
+		ID:       fmt.Sprintf("%s:%s:%s", c, dc, checksummedDst),
+		Chain:    c,
+		DstChain: dc,
 		DstAddr:  checksummedDst,
 	}, nil
-}
-
-func (a *Account) ID() string {
-	return fmt.Sprintf("%s:%s:%s", a.Chain, a.DstChain, a.DstAddr)
 }
 
 func (a *Account) SetDepositAddress(addr string) error {

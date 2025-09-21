@@ -13,30 +13,44 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-type TransactionService struct {
+type WalletManager struct {
 	ks     stores.KeyStore
 	client *ethclient.Client
 }
 
-func NewTransactionService(ks stores.KeyStore, client *ethclient.Client) *TransactionService {
-	return &TransactionService{
+func NewWalletManager(ks stores.KeyStore, client *ethclient.Client) *WalletManager {
+	return &WalletManager{
 		ks:     ks,
 		client: client,
 	}
 }
 
-func (w *TransactionService) SendTx(ctx context.Context, signedTx *types.Transaction) error {
-	err := w.client.SendTransaction(ctx, signedTx)
+func (wm *WalletManager) SendTx(ctx context.Context, signedTx *types.Transaction) (hash string, err error) {
+	err = wm.client.SendTransaction(ctx, signedTx)
 	if err != nil {
-		return err
+		return "", err
 	}
 
-	return nil
+	return signedTx.Hash().Hex(), nil
 }
 
-// Constructs and signs a transaction to send `amount` native token to `toAddr` from `fromAddr`
-func (w *TransactionService) PrepareSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (signedTx *types.Transaction, err error) {
-	_, err = w.ks.GetAccount(ctx, fromAddr)
+func (wm *WalletManager) SignTx(ctx context.Context, tx *types.Transaction, fromAddr string) (signedTx *types.Transaction, err error) {
+	chainID, err := wm.client.NetworkID(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	signed, err := wm.ks.SignTx(ctx, fromAddr, tx, chainID)
+	if err != nil {
+		return nil, err
+	}
+
+	return signed, nil
+}
+
+// Constructs a transaction to send `amount` native token to `toAddr` from `fromAddr`
+func (wm *WalletManager) PrepareSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (tx *types.Transaction, err error) {
+	_, err = wm.ks.GetAccount(ctx, fromAddr)
 	if err != nil {
 		return nil, fmt.Errorf("private key not found for %s", fromAddr)
 	}
@@ -44,16 +58,16 @@ func (w *TransactionService) PrepareSendTx(ctx context.Context, fromAddr string,
 	from := common.HexToAddress(fromAddr)
 	to := common.HexToAddress(toAddr)
 
-	nonce, err := w.client.PendingNonceAt(ctx, from)
+	nonce, err := wm.client.PendingNonceAt(ctx, from)
 	if err != nil {
 		return nil, err
 	}
-	balance, err := w.client.BalanceAt(ctx, from, nil)
+	balance, err := wm.client.BalanceAt(ctx, from, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	gasPrice, gasLimit, err := w.EstimateGas(ctx, from, to)
+	gasPrice, gasLimit, err := wm.EstimateGas(ctx, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -65,23 +79,13 @@ func (w *TransactionService) PrepareSendTx(ctx context.Context, fromAddr string,
 		return nil, fmt.Errorf("insufficient balance")
 	}
 
-	tx := types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
-	chainID, err := w.client.NetworkID(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	signed, err := w.ks.SignTx(ctx, fromAddr, tx, chainID)
-	if err != nil {
-		return nil, err
-	}
-
-	return signed, nil
+	tx = types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
+	return tx, nil
 }
 
-// Constructs and signs a transaction to send total balance (minus gas costs) to `toAddr` from `fromAddr`
-func (w *TransactionService) PrepareSweepTx(ctx context.Context, fromAddr string, toAddr string) (signedTx *types.Transaction, err error) {
-	_, err = w.ks.GetAccount(ctx, fromAddr)
+// Constructs a transaction to send total balance (minus gas costs) to `toAddr` from `fromAddr`
+func (wm *WalletManager) PrepareSweepTx(ctx context.Context, fromAddr string, toAddr string) (tx *types.Transaction, err error) {
+	_, err = wm.ks.GetAccount(ctx, fromAddr)
 	if err != nil {
 		return nil, fmt.Errorf("private key not found for %s", fromAddr)
 	}
@@ -89,16 +93,16 @@ func (w *TransactionService) PrepareSweepTx(ctx context.Context, fromAddr string
 	from := common.HexToAddress(fromAddr)
 	to := common.HexToAddress(toAddr)
 
-	nonce, err := w.client.PendingNonceAt(ctx, from)
+	nonce, err := wm.client.PendingNonceAt(ctx, from)
 	if err != nil {
 		return nil, err
 	}
-	balance, err := w.client.BalanceAt(ctx, from, nil)
+	balance, err := wm.client.BalanceAt(ctx, from, nil)
 	if err != nil {
 		return nil, err
 	}
 
-	gasPrice, gasLimit, err := w.EstimateGas(ctx, from, to)
+	gasPrice, gasLimit, err := wm.EstimateGas(ctx, from, to)
 	if err != nil {
 		return nil, err
 	}
@@ -109,29 +113,19 @@ func (w *TransactionService) PrepareSweepTx(ctx context.Context, fromAddr string
 	}
 	value := new(big.Int).Sub(balance, gasCost)
 
-	tx := types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
-	chainID, err := w.client.NetworkID(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	signed, err := w.ks.SignTx(ctx, fromAddr, tx, chainID)
-	if err != nil {
-		return nil, err
-	}
-
-	return signed, nil
+	tx = types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
+	return tx, nil
 }
 
-func (w *TransactionService) EstimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
+func (wm *WalletManager) EstimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
 	// NOTE: should use EIP-1559 compatible estimation in production
-	gasPrice, err = w.client.SuggestGasPrice(ctx)
+	gasPrice, err = wm.client.SuggestGasPrice(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// basic ETH send
-	gasLimit, err = w.client.EstimateGas(ctx, ethereum.CallMsg{
+	gasLimit, err = wm.client.EstimateGas(ctx, ethereum.CallMsg{
 		From:  from,
 		To:    &to,
 		Data:  nil,
