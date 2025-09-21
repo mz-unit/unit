@@ -11,12 +11,10 @@ import (
 	"unit/agent/internal/stores"
 
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 	hyperliquid "github.com/sonirico/go-hyperliquid"
 )
 
 type StateMachine struct {
-	client   *ethclient.Client
 	wm       *WalletManager
 	accounts stores.AccountStore
 	states   stores.StateStore
@@ -30,9 +28,8 @@ type StateMachine struct {
 	backoff          func(n int) time.Duration
 }
 
-func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hl *hyperliquid.Exchange, hotWallets map[models.Chain]string) (*StateMachine, error) {
+func NewStateMachine(wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hl *hyperliquid.Exchange, hotWallets map[models.Chain]string) (*StateMachine, error) {
 	sm := &StateMachine{
-		client:           client,
 		wm:               wm,
 		accounts:         as,
 		states:           ss,
@@ -128,7 +125,7 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 				DstChain:    account.DstChain,
 				SrcChain:    account.SrcChain,
 				AmountWei:   amount,
-				State:       models.StateDiscovered,
+				State:       models.StateSrcTxDiscovered,
 				UpdatedAt:   time.Now(),
 				CreatedAt:   time.Now(),
 			}
@@ -137,6 +134,8 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 			if err != nil {
 				return err
 			}
+
+			fmt.Printf("found deposit for address %s tx %s", account.DepositAddr, tx.Hash().Hex())
 		}
 	}
 	return nil
@@ -144,7 +143,25 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 
 func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.DepositState) (changed bool, err error) {
 	switch st.State {
-	case models.StateDiscovered, models.StateDstTxResend:
+	case models.StateSrcTxDiscovered:
+		confirmed, err := sm.wm.WithChain(st.SrcChain).WaitForConfirmations(ctx, st.TxHash, sm.minConfirmations)
+		if err != nil {
+			if errors.Is(err, ErrorRejectedTransaction) {
+				// user deposit was rejected, fail entire deposit
+				st.State = models.StateFailed
+				return true, nil
+			}
+			return false, fmt.Errorf("error waiting for confirmations")
+		}
+
+		if !confirmed {
+			return false, fmt.Errorf("needs more confirmations")
+		}
+
+		st.State = models.StateSrcTxConfirmed
+		return true, nil
+
+	case models.StateSrcTxConfirmed, models.StateDstTxResend:
 		addr, err := sm.getHotWallet(st.DstChain)
 		if err != nil {
 			return false, err

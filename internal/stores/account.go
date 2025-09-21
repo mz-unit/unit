@@ -48,9 +48,7 @@ func NewLocalAccountStore(path string) (*LocalAccountStore, error) {
 		return nil, err
 	}
 
-	return &LocalAccountStore{
-		db: db,
-	}, nil
+	return &LocalAccountStore{db: db}, nil
 }
 
 func (a *LocalAccountStore) Insert(ctx context.Context, account models.Account) error {

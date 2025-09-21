@@ -5,5 +5,5 @@ const (
 	KeyStorePassword = "password"
 
 	AccountDbPath = "./tmp/accounts.db"
-	StateDbPath   = "./tmp/state.db"
+	StateDbPath   = "./tmp/states.db"
 )

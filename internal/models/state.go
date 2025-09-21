@@ -10,7 +10,8 @@ import (
 type State string
 
 const (
-	StateDiscovered       State = "DISCOVERED"
+	StateSrcTxDiscovered  State = "SRC_TX_DISCOVERED"
+	StateSrcTxConfirmed   State = "SRC_TX_CONFIRMED"
 	StateDstTxBuilt       State = "DST_TX_BUILT"
 	StateDstTxSent        State = "DST_TX_SENT"
 	StateDstTxConfirmed   State = "DST_TX_CONFIRMED"

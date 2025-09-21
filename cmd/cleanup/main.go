@@ -5,5 +5,5 @@ import (
 )
 
 func main() {
-	os.RemoveAll("/tmp/")
+	os.RemoveAll("./tmp/")
 }

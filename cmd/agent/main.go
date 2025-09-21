@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"unit/agent/internal/api"
 	"unit/agent/internal/constants"
 	"unit/agent/internal/models"
 	"unit/agent/internal/services"
@@ -29,6 +30,31 @@ func main() {
 	sepoliaUrl := os.Getenv("SEPOLIA_RPC_URL")
 	hotWalletAddr := os.Getenv("HOT_WALLET_ADDRESS")
 	hotWalletPrivKey := os.Getenv("HOT_WALLET_PRIVATE_KEY")
+	srcChains := []string{"ethereum", "hyperliquid"}
+	dstChains := []string{"ethereum", "hyperliquid"}
+	assets := []string{"eth"}
+
+	ethClient, err := ethclient.Dial(sepoliaUrl)
+	if err != nil {
+		log.Fatalf("failed to connect to sepolia eth client: %v", err)
+	}
+	fmt.Println("connected to eth client")
+
+	publisher := services.NewBlockPublisher(ethClient)
+
+	ks, err := stores.NewLocalKeyStore(constants.KeyStorePassword, constants.KeyStorePath)
+	if err != nil {
+		log.Fatalf("failed to initialize key store %v", err)
+	}
+	as, err := stores.NewLocalAccountStore(constants.AccountDbPath)
+	if err != nil {
+		log.Fatalf("failed to initialize account store %v", err)
+	}
+	st, err := stores.NewLocalStateStore(constants.StateDbPath)
+	if err != nil {
+		log.Fatalf("failed to initialize state store %v", err)
+	}
+	fmt.Println("initialized stores")
 
 	hlInfo := hyperliquid.NewInfo(context.Background(), hyperliquid.TestnetAPIURL, true, nil, nil)
 	privateKey, err := crypto.HexToECDSA(strings.TrimPrefix(hotWalletPrivKey, "0x"))
@@ -45,37 +71,35 @@ func main() {
 		nil,
 	)
 
-	primaryClient, err := ethclient.Dial(sepoliaUrl)
-	if err != nil {
-		log.Fatalf("failed to connect to sepolia eth client: %v", err)
-	}
-
-	publisher := services.NewBlockPublisher(primaryClient)
-
-	ks, _ := stores.NewLocalKeyStore(constants.KeyStorePassword, constants.KeyStorePath)
-	as, _ := stores.NewLocalAccountStore(constants.AccountDbPath)
-	st, _ := stores.NewLocalStateStore(constants.AccountDbPath)
-
-	clients := map[models.Chain]*ethclient.Client{
-		models.Ethereum: primaryClient,
-	}
-	hotWallets := map[models.Chain]string{
+	wm := services.NewWalletManager(ks, map[models.Chain]*ethclient.Client{
+		models.Ethereum: ethClient,
+	}, hlHotWalletExg, hlInfo)
+	sm, err := services.NewStateMachine(wm, as, st, hlHotWalletExg, map[models.Chain]string{
 		models.Ethereum: hotWalletAddr,
-	}
-	wm := services.NewWalletManager(ks, clients, hlHotWalletExg, hlInfo)
-	sm, err := services.NewStateMachine(primaryClient, wm, as, st, hlHotWalletExg, hotWallets)
+	})
 	if err != nil {
 		log.Fatalf("failed to initialize state machine: %v", err)
 	}
+	a := api.NewApi(ks, as, srcChains, dstChains, assets)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	sigch := make(chan os.Signal, 1)
 	signal.Notify(sigch, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
 		<-sigch
 		fmt.Println("stopping")
 		cancel()
+	}()
+
+	go func() {
+		log.Println("API listening on :8000")
+		if err := a.Start(); err != nil {
+			if err.Error() != "http: Server closed" {
+				log.Fatalf("server error: %v", err)
+			}
+		}
 	}()
 
 	go func() {
@@ -97,7 +121,7 @@ func main() {
 				fmt.Println("block channel closed")
 				return
 			}
-			fmt.Printf("finalized block %d, hash=%s\n", block.NumberU64(), block.Hash().Hex())
+			fmt.Printf("block %d, hash=%s\n", block.NumberU64(), block.Hash().Hex())
 
 			if err := sm.ProcessBlock(ctx, block); err != nil {
 				log.Fatalf("error processing block %d: %v", block.NumberU64(), err)

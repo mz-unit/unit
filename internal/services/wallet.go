@@ -188,7 +188,7 @@ func (c *EvmCtx) WaitForConfirmations(ctx context.Context, txHash string, minCon
 	if err != nil {
 		return false, fmt.Errorf("error getting latest block number: %v", err)
 	}
-	if head < rcpt.BlockNumber.Uint64()+minConfirmations-1 {
+	if head < rcpt.BlockNumber.Uint64()+minConfirmations {
 		return false, nil
 	}
 

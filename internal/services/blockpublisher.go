@@ -17,16 +17,16 @@ type BlockPublisher struct {
 	out chan *types.Block
 	err chan error
 
-	lastFinalized uint64
+	lastBlock uint64
 }
 
 func NewBlockPublisher(client *ethclient.Client) *BlockPublisher {
 	return &BlockPublisher{
-		client:        client,
-		interval:      2 * time.Second,
-		out:           make(chan *types.Block, 20),
-		err:           make(chan error, 1),
-		lastFinalized: 0,
+		client:    client,
+		interval:  2 * time.Second,
+		out:       make(chan *types.Block, 20),
+		err:       make(chan error, 1),
+		lastBlock: 0,
 	}
 }
 
@@ -38,11 +38,11 @@ func (bp *BlockPublisher) Start(ctx context.Context) error {
 	defer ticker.Stop()
 
 	// start polling from last finalized block. In production, we should maintain a checkpointing component so that polling can continue from failure
-	if bp.lastFinalized == 0 {
-		if block, err := bp.getLatestFinalized(ctx); err == nil {
+	if bp.lastBlock == 0 {
+		if block, err := bp.getLatestBlock(ctx); err == nil && block != nil {
 			blockNumber := block.NumberU64()
 			if blockNumber > 0 {
-				bp.lastFinalized = blockNumber - 1
+				bp.lastBlock = blockNumber - 1
 			}
 		} else {
 			select {
@@ -58,7 +58,7 @@ func (bp *BlockPublisher) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
-			finalized, err := bp.getLatestFinalized(ctx)
+			block, err := bp.getLatestBlock(ctx)
 			if err != nil {
 				select {
 				case bp.err <- err:
@@ -68,12 +68,13 @@ func (bp *BlockPublisher) Start(ctx context.Context) error {
 				continue
 			}
 
-			current := finalized.NumberU64()
-			if current <= bp.lastFinalized {
+			current := block.NumberU64()
+			if current <= bp.lastBlock {
 				continue
 			}
 
-			for n := bp.lastFinalized + 1; n <= current; n++ {
+			// publish all blocks between lastBlock and current
+			for n := bp.lastBlock + 1; n <= current; n++ {
 				if err := bp.publishBlock(ctx, n); err != nil {
 					select {
 					case bp.err <- err:
@@ -82,7 +83,7 @@ func (bp *BlockPublisher) Start(ctx context.Context) error {
 					}
 					break
 				}
-				bp.lastFinalized = n
+				bp.lastBlock = n
 			}
 		}
 	}
@@ -106,13 +107,18 @@ func (bp *BlockPublisher) publishBlock(ctx context.Context, blockNumber uint64) 
 	}
 }
 
-func (bp *BlockPublisher) getLatestFinalized(ctx context.Context) (*types.Block, error) {
-	var block *types.Block
-	if err := bp.client.Client().CallContext(ctx, &block, "eth_getBlockByNumber", "finalized", true /* return transactions */); err != nil {
-		return nil, fmt.Errorf("eth_getBlockByNumber: %v", err)
+func (bp *BlockPublisher) getLatestBlock(ctx context.Context) (*types.Block, error) {
+	header, err := bp.client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("error getting latest header: %w", err)
 	}
-	if block == nil {
-		return nil, fmt.Errorf("nil block")
+	if header == nil || header.Number == nil {
+		return nil, fmt.Errorf("nil header")
+	}
+
+	block, err := bp.client.BlockByNumber(ctx, header.Number)
+	if err != nil {
+		return nil, fmt.Errorf("ethClient.BlockByNumber(%d): %w", header.Number.Uint64(), err)
 	}
 	return block, nil
 }
