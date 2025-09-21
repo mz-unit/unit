@@ -3,6 +3,7 @@
 2. Run `go run cmd/init/main.go` to import environment's private key into local key store.
 3. Start API server by running `go run cmd/api/main.go`. This will handle deposit address generation requests.
 4. Start state machine by running `go run cmd/worker/main.go`. This will listen to new blocks on Sepolia and process deposits.
+5. Clean up by running `go run cmd/cleanup/main.go`. This will delete all persisted data (deposit addresses, workflow states, keys).
 
 ## Deposit flow
 1. Call

@@ -10,7 +10,6 @@ import (
 	"unit/agent/internal/models"
 	"unit/agent/internal/stores"
 
-	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	hyperliquid "github.com/sonirico/go-hyperliquid"
@@ -175,21 +174,19 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		return true, nil
 
 	case models.StateDstTxSent:
-		rcpt, err := sm.client.TransactionReceipt(ctx, common.HexToHash(st.SentDstTxHash))
+		confirmed, err := sm.wm.WithChain(st.DstChain).WaitForConfirmations(ctx, st.SentDstTxHash, sm.minConfirmations)
 		if err != nil {
-			return false, fmt.Errorf("error getting receipt: %v", err)
+			if errors.Is(err, ErrorRejectedTransaction) {
+				st.State = models.StateDstTxRejected
+				return true, nil
+			}
+			return false, fmt.Errorf("error waiting for confirmations")
 		}
-		if rcpt.Status != types.ReceiptStatusSuccessful {
-			st.State = models.StateDstTxRejected
-			return true, fmt.Errorf("tx rejected, status=%d", rcpt.Status)
+
+		if !confirmed {
+			return false, fmt.Errorf("needs more confirmations")
 		}
-		head, err := sm.client.BlockNumber(ctx)
-		if err != nil {
-			return false, fmt.Errorf("error getting latest block number: %v", err)
-		}
-		if head < rcpt.BlockNumber.Uint64()+sm.minConfirmations-1 {
-			return false, fmt.Errorf("need more confirmations")
-		}
+
 		st.State = models.StateDstTxConfirmed
 		return true, nil
 
@@ -218,21 +215,19 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		return true, nil
 
 	case models.StateSweepTxSent:
-		rcpt, err := sm.client.TransactionReceipt(ctx, common.HexToHash(st.SentSweepTxHash))
+		confirmed, err := sm.wm.WithChain(st.SrcChain).WaitForConfirmations(ctx, st.SentSweepTxHash, sm.minConfirmations)
 		if err != nil {
-			return false, fmt.Errorf("error getting receipt: %v", err)
+			if errors.Is(err, ErrorRejectedTransaction) {
+				st.State = models.StateSweepTxRejected
+				return true, nil
+			}
+			return false, fmt.Errorf("error waiting for confirmations")
 		}
-		if rcpt.Status != types.ReceiptStatusSuccessful {
-			st.State = models.StateSweepTxRejected
-			return true, fmt.Errorf("tx rejected, status=%d", rcpt.Status)
+
+		if !confirmed {
+			return false, fmt.Errorf("needs more confirmations")
 		}
-		head, err := sm.client.BlockNumber(ctx)
-		if err != nil {
-			return false, fmt.Errorf("error getting latest block number: %v", err)
-		}
-		if head < rcpt.BlockNumber.Uint64()+sm.minConfirmations-1 {
-			return false, fmt.Errorf("need more confirmations")
-		}
+
 		st.State = models.StateSweepTxConfirmed
 		return true, nil
 

@@ -33,7 +33,7 @@ func NewApi(ks stores.KeyStore, as stores.AccountStore, srcChains []string, dstC
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/gen", a.HandleGenerate)
+	mux.HandleFunc("/gen/", a.HandleGenerate)
 
 	a.server = &http.Server{
 		Addr:    ":8000",

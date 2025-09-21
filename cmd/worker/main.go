@@ -16,17 +16,25 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/joho/godotenv"
 	hyperliquid "github.com/sonirico/go-hyperliquid"
 )
 
 func main() {
+	err := godotenv.Load()
+	if err != nil {
+		log.Fatal("Error loading .env file")
+	}
+
 	sepoliaUrl := os.Getenv("SEPOLIA_RPC_URL")
-	sepoliaAddr := os.Getenv("SEPOLIA_HOT_WALLET")
 	hotWalletAddr := os.Getenv("HOT_WALLET_ADDRESS")
 	hotWalletPrivKey := os.Getenv("HOT_WALLET_PRIVATE_KEY")
 
 	hlInfo := hyperliquid.NewInfo(context.Background(), hyperliquid.TestnetAPIURL, true, nil, nil)
-	privateKey, _ := crypto.HexToECDSA(strings.TrimPrefix(hotWalletPrivKey, "0x"))
+	privateKey, err := crypto.HexToECDSA(strings.TrimPrefix(hotWalletPrivKey, "0x"))
+	if err != nil {
+		log.Fatalf("failed to parse private key: %v", err)
+	}
 	hlHotWalletExg := hyperliquid.NewExchange(
 		context.Background(),
 		privateKey,
@@ -52,7 +60,7 @@ func main() {
 		models.Ethereum: primaryClient,
 	}
 	hotWallets := map[models.Chain]string{
-		models.Ethereum: sepoliaAddr,
+		models.Ethereum: hotWalletAddr,
 	}
 	wm := services.NewWalletManager(ks, clients, hlHotWalletExg, hlInfo)
 	sm, err := services.NewStateMachine(primaryClient, wm, as, st, hlHotWalletExg, hotWallets)

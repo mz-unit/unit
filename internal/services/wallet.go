@@ -3,9 +3,11 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
+	"time"
 
 	"unit/agent/internal/models"
 	"unit/agent/internal/stores"
@@ -15,6 +17,10 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	hyperliquid "github.com/sonirico/go-hyperliquid"
+)
+
+var (
+	ErrorRejectedTransaction = errors.New("rejected transaction")
 )
 
 type WalletManager struct {
@@ -29,6 +35,7 @@ func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Cl
 		ks:       ks,
 		clients:  clients,
 		exchange: exchange,
+		info:     info,
 	}
 }
 
@@ -53,6 +60,8 @@ type ChainCtx interface {
 	BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error)
 	// Builds an unsigned transaction to send total balance (minus gas costs) from `fromAddr` to `toAddr`. Used to sweep from deposit addresses
 	BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error)
+	// Waits for `minConfirmations` confirmations for transaction `txHash`
+	WaitForConfirmations(ctx context.Context, txHash string, minConfirmations uint64) (bool, error)
 }
 
 type EvmCtx struct {
@@ -167,6 +176,25 @@ func (c *EvmCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr strin
 	return common.Bytes2Hex(rawTxBytes), nil
 }
 
+func (c *EvmCtx) WaitForConfirmations(ctx context.Context, txHash string, minConfirmations uint64) (bool, error) {
+	rcpt, err := c.client.TransactionReceipt(ctx, common.HexToHash(txHash))
+	if err != nil {
+		return false, fmt.Errorf("error getting receipt: %v", err)
+	}
+	if rcpt.Status != types.ReceiptStatusSuccessful {
+		return false, ErrorRejectedTransaction
+	}
+	head, err := c.client.BlockNumber(ctx)
+	if err != nil {
+		return false, fmt.Errorf("error getting latest block number: %v", err)
+	}
+	if head < rcpt.BlockNumber.Uint64()+minConfirmations-1 {
+		return false, nil
+	}
+
+	return true, nil
+}
+
 func (c *EvmCtx) estimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
 	gasPrice, err = c.client.SuggestGasPrice(ctx)
 	if err != nil {
@@ -262,4 +290,11 @@ func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string
 		return "", fmt.Errorf("marshalling USD transfer action %v", err)
 	}
 	return string(bytes), nil
+}
+
+func (c *HlCtx) WaitForConfirmations(ctx context.Context, txHash string, minConfirmations uint64) (bool, error) {
+	// hyperliquid core has one block finality with block times of 200ms.
+	// for this POC effectively consider transfer finalized after 200ms, for correctess we need a way to get core's block number
+	time.Sleep(200 * time.Millisecond)
+	return true, nil
 }
