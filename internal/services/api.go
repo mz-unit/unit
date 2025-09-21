@@ -104,7 +104,7 @@ func (a *ApiServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	depositAddr, err := a.ks.CreateAccount()
+	depositAddr, err := a.ks.CreateAccount(ctx)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return

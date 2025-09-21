@@ -3,6 +3,7 @@ package stores
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"os"
 	"time"
 
@@ -10,34 +11,32 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/keystore"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 )
 
 type KeyStore interface {
-	CreateAccount() (string, error)
-	GetAccount(address string) (accounts.Account, error)
-	SignTx(ctx context.Context, address string, tx *types.Transaction) (*types.Transaction, error)
+	CreateAccount(ctx context.Context) (address string, err error)
+	GetAccount(ctx context.Context, address string) (accounts.Account, error)
+	SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 	SignHash(ctx context.Context, address string, hash []byte) ([]byte, error)
 }
 
 type LocalKeyStore struct {
 	ks             *keystore.KeyStore
-	client         *ethclient.Client
 	rootDir        string
 	unlockDuration time.Duration
 	passphrase     string
 }
 
-func NewLocalKeyStore(client *ethclient.Client, passphrase string, rootDir string, unlockDuration time.Duration) (*LocalKeyStore, error) {
+func NewLocalKeyStore(passphrase string, rootDir string, unlockDuration time.Duration) (*LocalKeyStore, error) {
 	if err := os.MkdirAll(rootDir, 0700); err != nil {
 		return nil, err
 	}
 
 	ks := keystore.NewKeyStore(rootDir, keystore.StandardScryptN, keystore.StandardScryptP)
-	return &LocalKeyStore{ks: ks, client: client, passphrase: passphrase, rootDir: rootDir, unlockDuration: unlockDuration}, nil
+	return &LocalKeyStore{ks: ks, passphrase: passphrase, rootDir: rootDir, unlockDuration: unlockDuration}, nil
 }
 
-func (l *LocalKeyStore) CreateAccount() (string, error) {
+func (l *LocalKeyStore) CreateAccount(ctx context.Context) (address string, err error) {
 	account, err := l.ks.NewAccount(l.passphrase)
 	if err != nil {
 		return "", err
@@ -45,7 +44,7 @@ func (l *LocalKeyStore) CreateAccount() (string, error) {
 	return account.Address.Hex(), nil
 }
 
-func (l *LocalKeyStore) GetAccount(address string) (accounts.Account, error) {
+func (l *LocalKeyStore) GetAccount(ctx context.Context, address string) (accounts.Account, error) {
 	if !l.ks.HasAddress(common.HexToAddress(address)) {
 		return accounts.Account{}, fmt.Errorf("address not found: %s", address)
 	}
@@ -56,8 +55,8 @@ func (l *LocalKeyStore) GetAccount(address string) (accounts.Account, error) {
 	return account, nil
 }
 
-func (l *LocalKeyStore) SignTx(ctx context.Context, address string, tx *types.Transaction) (*types.Transaction, error) {
-	account, err := l.GetAccount(address)
+func (l *LocalKeyStore) SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
+	account, err := l.GetAccount(ctx, address)
 	if err != nil {
 		return nil, err
 	}
@@ -67,10 +66,6 @@ func (l *LocalKeyStore) SignTx(ctx context.Context, address string, tx *types.Tr
 	}
 	defer l.ks.Lock(account.Address)
 
-	chainID, err := l.client.NetworkID(ctx)
-	if err != nil {
-		return nil, err
-	}
 	signedTx, err := l.ks.SignTxWithPassphrase(account, l.passphrase, tx, chainID)
 	if err != nil {
 		return nil, err
@@ -79,7 +74,7 @@ func (l *LocalKeyStore) SignTx(ctx context.Context, address string, tx *types.Tr
 }
 
 func (l *LocalKeyStore) SignHash(ctx context.Context, address string, hash []byte) ([]byte, error) {
-	account, err := l.GetAccount(address)
+	account, err := l.GetAccount(ctx, address)
 	if err != nil {
 		return nil, err
 	}
