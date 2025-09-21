@@ -9,12 +9,6 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-// type Indexer interface {
-// 	Start() error
-// 	Out() <-chan models.Block
-// 	Err() <-chan error
-// }
-
 type Indexer struct {
 	client   *ethclient.Client
 	interval time.Duration

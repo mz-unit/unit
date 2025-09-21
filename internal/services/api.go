@@ -4,22 +4,29 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"slices"
 	"strings"
 
 	"unit/agent/internal/models"
 	"unit/agent/internal/stores"
 )
 
-type ApiServer struct {
-	server *http.Server
-	ks     stores.KeyStore
-	as     stores.AccountStore
+type ApiService struct {
+	server    *http.Server
+	ks        stores.KeyStore
+	as        stores.AccountStore
+	srcChains []string
+	dstChains []string
+	assets    []string
 }
 
-func NewApiServer(ks stores.KeyStore, as stores.AccountStore) *ApiServer {
-	a := &ApiServer{
-		ks: ks,
-		as: as,
+func NewApiService(ks stores.KeyStore, as stores.AccountStore, srcChains []string, dstChains []string, assets []string) *ApiService {
+	a := &ApiService{
+		ks:        ks,
+		as:        as,
+		srcChains: srcChains,
+		dstChains: dstChains,
+		assets:    assets,
 	}
 
 	mux := http.NewServeMux()
@@ -32,21 +39,20 @@ func NewApiServer(ks stores.KeyStore, as stores.AccountStore) *ApiServer {
 	return a
 }
 
-func (a *ApiServer) Start() error {
+func (a *ApiService) Start() error {
 	return a.server.ListenAndServe()
 }
 
-func (a *ApiServer) Shutdown(ctx context.Context) error {
+func (a *ApiService) Shutdown(ctx context.Context) error {
 	return a.server.Shutdown(ctx)
 }
 
 type generateResponse struct {
 	Address string `json:"address"`
 	Status  string `json:"status"`
-	// Signature string `json:"signature"`
 }
 
-func (a *ApiServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
+func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if r.Method != http.MethodGet {
@@ -72,17 +78,17 @@ func (a *ApiServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if account.Chain != "ethereum" {
+	if !slices.Contains(a.srcChains, account.Chain) {
 		http.Error(w, "unsupported chain", http.StatusBadRequest)
 		return
 	}
 
-	if account.DstChain != "hyperliquid" {
+	if !slices.Contains(a.dstChains, account.DstChain) {
 		http.Error(w, "unsupported destination chain", http.StatusBadRequest)
 		return
 	}
 
-	if asset != "eth" {
+	if !slices.Contains(a.assets, asset) {
 		http.Error(w, "unsupported asset", http.StatusBadRequest)
 		return
 	}
@@ -100,7 +106,7 @@ func (a *ApiServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		}
 
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(resp)
+		json.NewEncoder(w).Encode(resp)
 		return
 	}
 
@@ -128,5 +134,5 @@ func (a *ApiServer) handleGenerate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(resp)
+	json.NewEncoder(w).Encode(resp)
 }

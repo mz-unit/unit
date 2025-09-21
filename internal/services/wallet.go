@@ -13,19 +13,19 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 )
 
-type WalletManager struct {
+type TransactionService struct {
 	ks     stores.KeyStore
 	client *ethclient.Client
 }
 
-func NewWalletManager(ks stores.KeyStore, client *ethclient.Client) *WalletManager {
-	return &WalletManager{
+func NewTransactionService(ks stores.KeyStore, client *ethclient.Client) *TransactionService {
+	return &TransactionService{
 		ks:     ks,
 		client: client,
 	}
 }
 
-func (w *WalletManager) SendTx(ctx context.Context, signedTx *types.Transaction) error {
+func (w *TransactionService) SendTx(ctx context.Context, signedTx *types.Transaction) error {
 	err := w.client.SendTransaction(ctx, signedTx)
 	if err != nil {
 		return err
@@ -35,7 +35,7 @@ func (w *WalletManager) SendTx(ctx context.Context, signedTx *types.Transaction)
 }
 
 // Constructs and signs a transaction to send `amount` native token to `toAddr` from `fromAddr`
-func (w *WalletManager) PrepareSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (signedTx *types.Transaction, err error) {
+func (w *TransactionService) PrepareSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (signedTx *types.Transaction, err error) {
 	_, err = w.ks.GetAccount(ctx, fromAddr)
 	if err != nil {
 		return nil, fmt.Errorf("private key not found for %s", fromAddr)
@@ -80,7 +80,7 @@ func (w *WalletManager) PrepareSendTx(ctx context.Context, fromAddr string, toAd
 }
 
 // Constructs and signs a transaction to send total balance (minus gas costs) to `toAddr` from `fromAddr`
-func (w *WalletManager) PrepareSweepTx(ctx context.Context, fromAddr string, toAddr string) (signedTx *types.Transaction, err error) {
+func (w *TransactionService) PrepareSweepTx(ctx context.Context, fromAddr string, toAddr string) (signedTx *types.Transaction, err error) {
 	_, err = w.ks.GetAccount(ctx, fromAddr)
 	if err != nil {
 		return nil, fmt.Errorf("private key not found for %s", fromAddr)
@@ -123,7 +123,7 @@ func (w *WalletManager) PrepareSweepTx(ctx context.Context, fromAddr string, toA
 	return signed, nil
 }
 
-func (w *WalletManager) EstimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
+func (w *TransactionService) EstimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
 	// NOTE: should use EIP-1559 compatible estimation in production
 	gasPrice, err = w.client.SuggestGasPrice(ctx)
 	if err != nil {
