@@ -22,18 +22,18 @@ import (
 func main() {
 	sepoliaUrl := os.Getenv("SEPOLIA_RPC_URL")
 	sepoliaAddr := os.Getenv("SEPOLIA_HOT_WALLET")
-	hlAddr := os.Getenv("HYPERLIQUID_HOT_WALLET")
-	hlPrivKey := os.Getenv("HYPERLIQUID_PRIV_KEY")
+	hotWalletAddr := os.Getenv("HOT_WALLET_ADDRESS")
+	hotWalletPrivKey := os.Getenv("HOT_WALLET_PRIVATE_KEY")
 
 	hlInfo := hyperliquid.NewInfo(context.Background(), hyperliquid.TestnetAPIURL, true, nil, nil)
-	privateKey, _ := crypto.HexToECDSA(strings.TrimPrefix(hlPrivKey, "0x"))
+	privateKey, _ := crypto.HexToECDSA(strings.TrimPrefix(hotWalletPrivKey, "0x"))
 	hlHotWalletExg := hyperliquid.NewExchange(
 		context.Background(),
 		privateKey,
 		hyperliquid.TestnetAPIURL,
 		nil,
 		"",
-		hlAddr,
+		hotWalletAddr,
 		nil,
 	)
 

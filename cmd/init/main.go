@@ -12,8 +12,8 @@ import (
 
 func main() {
 	// import Hyperliquid hot wallet private key to keystore
-	hlKey := os.Getenv("HYPERLIQUID_PRIV_KEY")
-	privateKey, _ := crypto.HexToECDSA(strings.TrimPrefix(hlKey, "0x"))
+	hotWalletKey := os.Getenv("HOT_WALLET_PRIV_KEY")
+	privateKey, _ := crypto.HexToECDSA(strings.TrimPrefix(hotWalletKey, "0x"))
 	keyStore, _ := stores.NewLocalKeyStore(constants.KeyStorePassword, constants.KeyStorePath)
 
 	addr, err := keyStore.ImportECDSA(privateKey, constants.KeyStorePassword)
