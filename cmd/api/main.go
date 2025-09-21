@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"unit/agent/internal/api"
+	"unit/agent/internal/constants"
 	"unit/agent/internal/stores"
 )
 
@@ -17,14 +18,8 @@ func main() {
 	dstChains := []string{"ethereum", "hyperliquid"}
 	assets := []string{"eth"}
 
-	accountStore, err := stores.NewLocalAccountStore("./tmp/accounts.db")
-	if err != nil {
-		log.Fatalf("init account store: %v", err)
-	}
-	keyStore, err := stores.NewLocalKeyStore("password", "./tmp/keys")
-	if err != nil {
-		log.Fatalf("init keystore: %v", err)
-	}
+	accountStore, _ := stores.NewLocalAccountStore(constants.AccountDbPath)
+	keyStore, _ := stores.NewLocalKeyStore(constants.KeyStorePassword, constants.KeyStorePath)
 
 	a := api.NewApi(keyStore, accountStore, srcChains, dstChains, assets)
 

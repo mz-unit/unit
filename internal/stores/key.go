@@ -2,6 +2,7 @@ package stores
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"fmt"
 	"math/big"
 	"os"
@@ -82,6 +83,15 @@ func (l *LocalKeyStore) SignHash(ctx context.Context, address string, hash []byt
 		return nil, err
 	}
 	return signedHash, nil
+}
+
+func (l *LocalKeyStore) ImportECDSA(privKey *ecdsa.PrivateKey, password string) (string, error) {
+	acct, err := l.ks.ImportECDSA(privKey, password)
+	if err != nil {
+		return "", err
+	}
+
+	return acct.Address.Hex(), nil
 }
 
 func (l *LocalKeyStore) get(address string) (accounts.Account, error) {

@@ -6,8 +6,10 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 
+	"unit/agent/internal/constants"
 	"unit/agent/internal/models"
 	"unit/agent/internal/services"
 	"unit/agent/internal/stores"
@@ -24,13 +26,13 @@ func main() {
 	hlPrivKey := os.Getenv("HYPERLIQUID_PRIV_KEY")
 
 	hlInfo := hyperliquid.NewInfo(context.Background(), hyperliquid.TestnetAPIURL, true, nil, nil)
-	privateKey, _ := crypto.HexToECDSA(hlPrivKey)
-	hlExchange := hyperliquid.NewExchange(
+	privateKey, _ := crypto.HexToECDSA(strings.TrimPrefix(hlPrivKey, "0x"))
+	hlHotWalletExg := hyperliquid.NewExchange(
 		context.Background(),
 		privateKey,
 		hyperliquid.TestnetAPIURL,
 		nil,
-		"vault-address",
+		"",
 		hlAddr,
 		nil,
 	)
@@ -42,9 +44,9 @@ func main() {
 
 	publisher := services.NewBlockPublisher(primaryClient)
 
-	ks, _ := stores.NewLocalKeyStore("password", "./tmp/keys")
-	as, _ := stores.NewLocalAccountStore("./tmp/accounts.db")
-	st, _ := stores.NewLocalStateStore("./tmp/state.db")
+	ks, _ := stores.NewLocalKeyStore(constants.KeyStorePassword, constants.KeyStorePath)
+	as, _ := stores.NewLocalAccountStore(constants.AccountDbPath)
+	st, _ := stores.NewLocalStateStore(constants.AccountDbPath)
 
 	clients := map[models.Chain]*ethclient.Client{
 		models.Ethereum: primaryClient,
@@ -52,8 +54,8 @@ func main() {
 	hotWallets := map[models.Chain]string{
 		models.Ethereum: sepoliaAddr,
 	}
-	wm := services.NewWalletManager(ks, clients, hlExchange, hlInfo)
-	sm, err := services.NewStateMachine(primaryClient, wm, as, st, hlExchange, hotWallets)
+	wm := services.NewWalletManager(ks, clients, hlHotWalletExg, hlInfo)
+	sm, err := services.NewStateMachine(primaryClient, wm, as, st, hlHotWalletExg, hotWallets)
 	if err != nil {
 		log.Fatalf("failed to initialize state machine: %v", err)
 	}
