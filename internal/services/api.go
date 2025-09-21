@@ -3,6 +3,7 @@ package services
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -66,24 +67,17 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// additional validation should be in place to ensure destination address is valid for a destination chain if we are to expand beyond EVM
 	chain := parts[0]
 	dstChain := parts[1]
 	asset := parts[2]
 	dstAddr := parts[3]
 
-	account, err := models.NewAccount(chain, dstChain, dstAddr)
-	if err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
-		return
-	}
-
-	if !slices.Contains(a.srcChains, account.Chain) {
+	if !slices.Contains(a.srcChains, chain) {
 		http.Error(w, "unsupported chain", http.StatusBadRequest)
 		return
 	}
 
-	if !slices.Contains(a.dstChains, account.DstChain) {
+	if !slices.Contains(a.dstChains, dstChain) {
 		http.Error(w, "unsupported destination chain", http.StatusBadRequest)
 		return
 	}
@@ -93,15 +87,21 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	existing, err := a.accounts.Get(ctx, account.ID)
+	id, err := models.AccountID(chain, dstChain, dstAddr)
 	if err != nil {
+		http.Error(w, "invalid destination address", http.StatusBadRequest)
+		return
+	}
+
+	existing, err := a.accounts.Get(ctx, id)
+	if err != nil && !errors.Is(err, stores.ErrAccountNotFound) {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	if existing != nil && existing.DepositAddr != nil {
+	if existing != nil {
 		resp := generateResponse{
-			Address: *existing.DepositAddr,
+			Address: existing.DepositAddr,
 			Status:  "ok",
 		}
 
@@ -110,13 +110,12 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	depositAddr, err := a.keys.CreateAccount(ctx)
+	depositAddr, err := a.keys.CreateKey(ctx)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
-
-	err = account.SetDepositAddress(depositAddr)
+	account, err := models.NewAccount(models.Chain(chain), models.Chain(dstChain), dstAddr, depositAddr)
 	if err != nil {
 		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return

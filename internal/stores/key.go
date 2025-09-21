@@ -14,8 +14,8 @@ import (
 )
 
 type KeyStore interface {
-	CreateAccount(ctx context.Context) (address string, err error)
-	GetAccount(ctx context.Context, address string) (accounts.Account, error)
+	CreateKey(ctx context.Context) (address string, err error)
+	HasKey(ctx context.Context, address string) bool
 	SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
 	SignHash(ctx context.Context, address string, hash []byte) ([]byte, error)
 }
@@ -36,7 +36,7 @@ func NewLocalKeyStore(passphrase string, rootDir string, unlockDuration time.Dur
 	return &LocalKeyStore{ks: ks, passphrase: passphrase, rootDir: rootDir, unlockDuration: unlockDuration}, nil
 }
 
-func (l *LocalKeyStore) CreateAccount(ctx context.Context) (address string, err error) {
+func (l *LocalKeyStore) CreateKey(ctx context.Context) (address string, err error) {
 	account, err := l.ks.NewAccount(l.passphrase)
 	if err != nil {
 		return "", err
@@ -44,19 +44,12 @@ func (l *LocalKeyStore) CreateAccount(ctx context.Context) (address string, err 
 	return account.Address.Hex(), nil
 }
 
-func (l *LocalKeyStore) GetAccount(ctx context.Context, address string) (accounts.Account, error) {
-	if !l.ks.HasAddress(common.HexToAddress(address)) {
-		return accounts.Account{}, fmt.Errorf("address not found: %s", address)
-	}
-	account, err := l.ks.Find(accounts.Account{Address: common.HexToAddress(address)})
-	if err != nil {
-		return accounts.Account{}, err
-	}
-	return account, nil
+func (l *LocalKeyStore) HasKey(ctx context.Context, address string) bool {
+	return l.ks.HasAddress(common.HexToAddress(address))
 }
 
 func (l *LocalKeyStore) SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
-	account, err := l.GetAccount(ctx, address)
+	account, err := l.get(address)
 	if err != nil {
 		return nil, err
 	}
@@ -74,7 +67,7 @@ func (l *LocalKeyStore) SignTx(ctx context.Context, address string, tx *types.Tr
 }
 
 func (l *LocalKeyStore) SignHash(ctx context.Context, address string, hash []byte) ([]byte, error) {
-	account, err := l.GetAccount(ctx, address)
+	account, err := l.get(address)
 	if err != nil {
 		return nil, err
 	}
@@ -89,4 +82,15 @@ func (l *LocalKeyStore) SignHash(ctx context.Context, address string, hash []byt
 		return nil, err
 	}
 	return signedHash, nil
+}
+
+func (l *LocalKeyStore) get(address string) (accounts.Account, error) {
+	if !l.ks.HasAddress(common.HexToAddress(address)) {
+		return accounts.Account{}, fmt.Errorf("address not found: %s", address)
+	}
+	account, err := l.ks.Find(accounts.Account{Address: common.HexToAddress(address)})
+	if err != nil {
+		return accounts.Account{}, err
+	}
+	return account, nil
 }

@@ -17,24 +17,26 @@ import (
 
 type StateMachine struct {
 	client   *ethclient.Client
-	wm       *WalletManager // TODO instantiate wallet manager per chain
+	wm       *WalletManager
 	accounts stores.AccountStore
 	states   stores.StateStore
 
 	treasuryAddr     string
+	treasuryChain    models.Chain
 	interval         time.Duration
 	minConfirmations uint64
 	maxAttempts      int
 	backoff          func(n int) time.Duration
 }
 
-func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, treasuryAddr string) (*StateMachine, error) {
+func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, treasuryAddr string, treasuryChain models.Chain) (*StateMachine, error) {
 	sm := &StateMachine{
 		client:           client,
 		wm:               wm,
 		accounts:         as,
 		states:           ss,
 		treasuryAddr:     treasuryAddr,
+		treasuryChain:    treasuryChain,
 		interval:         2 * time.Second,
 		minConfirmations: 14, // Ethereum mainnet specific. For extensibility, create chain configs instead
 		maxAttempts:      8,
@@ -111,14 +113,15 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 			return err
 		}
 
-		if account != nil && account.DepositAddr != nil {
+		if account != nil {
 			amount := new(big.Int).Set(tx.Value())
 			deposit := &models.DepositState{
-				ID:          fmt.Sprintf("%s|%s", *account.DepositAddr, tx.Hash().Hex()),
+				ID:          fmt.Sprintf("%s|%s", account.DepositAddr, tx.Hash().Hex()),
 				TxHash:      tx.Hash().Hex(),
-				DepositAddr: *account.DepositAddr,
+				DepositAddr: account.DepositAddr,
 				DstAddr:     account.DstAddr,
 				DstChain:    account.DstChain,
+				SrcChain:    account.SrcChain,
 				AmountWei:   amount,
 				State:       models.StateDiscovered,
 				UpdatedAt:   time.Now(),
@@ -134,13 +137,13 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 	return nil
 }
 
-func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState) (bool, error) {
+func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState) (changed bool, err error) {
 	switch st.State {
 	case models.StateDiscovered:
 		// TODO: chain id is important, need to ensure we are creating tx on appropriate chain and sending on appropriate chain
-		tx, err := sm.wm.PrepareSendTx(ctx, sm.treasuryAddr, st.DstAddr, st.AmountWei)
+		tx, err := sm.wm.WithChain(sm.treasuryChain).BuildSendTx(ctx, sm.treasuryAddr, st.DstAddr, st.AmountWei)
 		if err != nil {
-			return false, err
+			return false, fmt.Errorf("error marshaling tx: %w", err)
 		}
 
 		rawTxBytes, err := tx.MarshalBinary()
@@ -158,12 +161,12 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 			return false, fmt.Errorf("error unmarshaling tx: %w", err)
 		}
 
-		signed, err := sm.wm.SignTx(ctx, tx, sm.treasuryAddr)
+		signed, err := sm.wm.WithChain(st.DstChain).SignTx(ctx, tx, sm.treasuryAddr)
 		if err != nil {
 			return false, fmt.Errorf("error signing tx: %w", err)
 		}
 
-		hash, err := sm.wm.SendTx(ctx, signed)
+		hash, err := sm.wm.WithChain(st.DstChain).SendTx(ctx, signed)
 		if err != nil {
 			return false, fmt.Errorf("error sending tx: %w", err)
 		}
@@ -193,7 +196,7 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 
 	case models.StateDstTxConfirmed, models.StateSweepTxRetry:
 		// TODO: chain id is important, need to ensure we are creating tx on appropriate chain
-		tx, err := sm.wm.PrepareSweepTx(ctx, st.DepositAddr, sm.treasuryAddr)
+		tx, err := sm.wm.WithChain(st.SrcChain).BuildSweepTx(ctx, st.DepositAddr, sm.treasuryAddr)
 		if err != nil {
 			return false, err
 		}
@@ -214,12 +217,12 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 			return false, fmt.Errorf("error unmarshaling tx: %w", err)
 		}
 
-		signed, err := sm.wm.SignTx(ctx, tx, st.DepositAddr)
+		signed, err := sm.wm.WithChain(st.SrcChain).SignTx(ctx, tx, st.DepositAddr)
 		if err != nil {
 			return false, fmt.Errorf("error signing tx: %w", err)
 		}
 
-		hash, err := sm.wm.SendTx(ctx, signed)
+		hash, err := sm.wm.WithChain(st.SrcChain).SendTx(ctx, signed)
 		if err != nil {
 			return false, fmt.Errorf("error sending tx: %w", err)
 		}

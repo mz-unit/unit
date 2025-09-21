@@ -28,7 +28,8 @@ type DepositState struct {
 	TxHash          string    `json:"tx_hash"`
 	DepositAddr     string    `json:"deposit_addr"`
 	DstAddr         string    `json:"dst_addr"`
-	DstChain        string    `json:"dst_chain"`
+	DstChain        Chain     `json:"dst_chain"`
+	SrcChain        Chain     `json:"src_chain"`
 	AmountWei       *big.Int  `json:"amount_wei"`
 	State           State     `json:"state"`
 	UnsignedDstTx   string    `json:"unsigned_dst_tx"`

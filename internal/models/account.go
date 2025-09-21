@@ -2,42 +2,42 @@ package models
 
 import (
 	"fmt"
-	"strings"
 
 	"unit/agent/internal/utils/address"
 )
 
 type Account struct {
-	ID          string  `json:"id"`
-	Chain       string  `json:"chain"`
-	DstChain    string  `json:"dst_chain"`
-	DstAddr     string  `json:"dst_addr"`
-	DepositAddr *string `json:"deposit_addr"`
+	ID          string `json:"id"`
+	SrcChain    Chain  `json:"src_chain"`
+	DstChain    Chain  `json:"dst_chain"`
+	DstAddr     string `json:"dst_addr"`
+	DepositAddr string `json:"deposit_addr"`
 }
 
-func NewAccount(chain string, dstChain string, dstAddr string) (*Account, error) {
+func NewAccount(srcChain Chain, dstChain Chain, dstAddr string, depositAddr string) (*Account, error) {
 	checksummedDst, err := address.Checksummed(dstAddr)
 	if err != nil {
 		return nil, err
 	}
 
-	c := strings.ToLower(chain)
-	dc := strings.ToLower(dstChain)
+	checksummedDpst, err := address.Checksummed(depositAddr)
+	if err != nil {
+		return nil, err
+	}
 
 	return &Account{
-		ID:       fmt.Sprintf("%s:%s:%s", c, dc, checksummedDst),
-		Chain:    c,
-		DstChain: dc,
-		DstAddr:  checksummedDst,
+		ID:          fmt.Sprintf("%s:%s:%s", srcChain, dstChain, checksummedDst),
+		SrcChain:    srcChain,
+		DstChain:    dstChain,
+		DstAddr:     checksummedDst,
+		DepositAddr: checksummedDpst,
 	}, nil
 }
 
-func (a *Account) SetDepositAddress(addr string) error {
-	checksummed, err := address.Checksummed(addr)
+func AccountID(srcChain string, dstChain string, dstAddr string) (string, error) {
+	checksummedDst, err := address.Checksummed(dstAddr)
 	if err != nil {
-		return err
+		return "", err
 	}
-
-	a.DepositAddr = &checksummed
-	return nil
+	return fmt.Sprintf("%s:%s:%s", srcChain, dstChain, checksummedDst), nil
 }
