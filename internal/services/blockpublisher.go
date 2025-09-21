@@ -24,8 +24,8 @@ func NewBlockPublisher(client *ethclient.Client) *BlockPublisher {
 	return &BlockPublisher{
 		client:        client,
 		interval:      2 * time.Second,
-		out:           make(chan *types.Block),
-		err:           make(chan error),
+		out:           make(chan *types.Block, 20),
+		err:           make(chan error, 1),
 		lastFinalized: 0,
 	}
 }
@@ -109,10 +109,10 @@ func (bp *BlockPublisher) publishBlock(ctx context.Context, blockNumber uint64) 
 func (bp *BlockPublisher) getLatestFinalized(ctx context.Context) (*types.Block, error) {
 	var block *types.Block
 	if err := bp.client.Client().CallContext(ctx, &block, "eth_getBlockByNumber", "finalized", true /* return transactions */); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("eth_getBlockByNumber: %v", err)
 	}
 	if block == nil {
-		return nil, fmt.Errorf("received nil block")
+		return nil, fmt.Errorf("nil block")
 	}
 	return block, nil
 }

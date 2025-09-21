@@ -1,4 +1,4 @@
-package services
+package api
 
 import (
 	"context"
@@ -10,9 +10,11 @@ import (
 
 	"unit/agent/internal/models"
 	"unit/agent/internal/stores"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
-type ApiService struct {
+type Api struct {
 	server    *http.Server
 	keys      stores.KeyStore
 	accounts  stores.AccountStore
@@ -21,8 +23,8 @@ type ApiService struct {
 	assets    []string
 }
 
-func NewApiService(ks stores.KeyStore, as stores.AccountStore, srcChains []string, dstChains []string, assets []string) *ApiService {
-	a := &ApiService{
+func NewApi(ks stores.KeyStore, as stores.AccountStore, srcChains []string, dstChains []string, assets []string) *Api {
+	a := &Api{
 		keys:      ks,
 		accounts:  as,
 		srcChains: srcChains,
@@ -31,7 +33,7 @@ func NewApiService(ks stores.KeyStore, as stores.AccountStore, srcChains []strin
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/gen", a.handleGenerate)
+	mux.HandleFunc("/gen", a.HandleGenerate)
 
 	a.server = &http.Server{
 		Addr:    ":8000",
@@ -40,11 +42,11 @@ func NewApiService(ks stores.KeyStore, as stores.AccountStore, srcChains []strin
 	return a
 }
 
-func (a *ApiService) Start() error {
+func (a *Api) Start() error {
 	return a.server.ListenAndServe()
 }
 
-func (a *ApiService) Shutdown(ctx context.Context) error {
+func (a *Api) Shutdown(ctx context.Context) error {
 	return a.server.Shutdown(ctx)
 }
 
@@ -53,7 +55,7 @@ type generateResponse struct {
 	Status  string `json:"status"`
 }
 
-func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
+func (a *Api) HandleGenerate(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	if r.Method != http.MethodGet {
@@ -87,11 +89,12 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	id, err := models.AccountID(chain, dstChain, dstAddr)
-	if err != nil {
+	if !common.IsHexAddress(dstAddr) {
 		http.Error(w, "invalid destination address", http.StatusBadRequest)
 		return
 	}
+
+	id := models.AccountID(models.Chain(chain), models.Chain(dstChain), dstAddr)
 
 	existing, err := a.accounts.Get(ctx, id)
 	if err != nil && !errors.Is(err, stores.ErrAccountNotFound) {
@@ -101,7 +104,7 @@ func (a *ApiService) handleGenerate(w http.ResponseWriter, r *http.Request) {
 
 	if existing != nil {
 		resp := generateResponse{
-			Address: existing.DepositAddr,
+			Address: existing.DepositAddr.Hex(),
 			Status:  "ok",
 		}
 

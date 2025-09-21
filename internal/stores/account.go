@@ -67,7 +67,7 @@ func (a *LocalAccountStore) Insert(ctx context.Context, account models.Account) 
 			return err
 		}
 
-		if err := byAddr.Put([]byte(account.DepositAddr), []byte(account.ID)); err != nil {
+		if err := byAddr.Put([]byte(account.DepositAddr.Hex()), []byte(account.ID)); err != nil {
 			return err
 		}
 		return nil

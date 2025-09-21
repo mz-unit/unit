@@ -21,25 +21,25 @@ type StateMachine struct {
 	accounts stores.AccountStore
 	states   stores.StateStore
 
-	treasuryAddr     string
-	treasuryChain    models.Chain
+	hotWallets       map[models.Chain]string
 	interval         time.Duration
 	minConfirmations uint64
+	minDepositWei    *big.Int
 	maxAttempts      int
 	backoff          func(n int) time.Duration
 }
 
-func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, treasuryAddr string, treasuryChain models.Chain) (*StateMachine, error) {
+func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hotWallets map[models.Chain]string) (*StateMachine, error) {
 	sm := &StateMachine{
 		client:           client,
 		wm:               wm,
 		accounts:         as,
 		states:           ss,
-		treasuryAddr:     treasuryAddr,
-		treasuryChain:    treasuryChain,
+		hotWallets:       hotWallets,
 		interval:         2 * time.Second,
-		minConfirmations: 14, // Ethereum mainnet specific. For extensibility, create chain configs instead
-		maxAttempts:      8,
+		minConfirmations: 14, // Ethereum mainnet specific
+		maxAttempts:      5,
+		minDepositWei:    new(big.Int).SetUint64(1000000000000000000), // .01
 		backoff: func(n int) time.Duration {
 			d := time.Duration(1<<min(n, 10)) * time.Second
 			return min(d, 2*time.Minute)
@@ -49,47 +49,51 @@ func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.Acco
 }
 
 func (sm *StateMachine) Start(ctx context.Context) error {
-	tick := time.NewTicker(sm.interval)
-	defer tick.Stop()
+	ticker := time.NewTicker(sm.interval)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-tick.C:
+
+		case <-ticker.C:
 			now := time.Now()
-			err := sm.states.Scan(ctx, func(workflow *models.DepositState) error {
-				if workflow.State == models.StateDone {
+
+			if err := sm.states.Scan(ctx, func(wf *models.DepositState) error {
+				switch wf.State {
+				case models.StateDone, models.StateFailed:
 					return nil
 				}
 
-				if workflow.Attempts == sm.maxAttempts {
-					workflow.State = models.StateFailed
-					workflow.Error = "attempts exhausted"
-					workflow.UpdatedAt = now
-					_ = sm.states.Put(ctx, workflow)
+				if wf.Attempts >= sm.maxAttempts {
+					wf.State = models.StateFailed
+					wf.Error = "retries exhausted"
+					wf.UpdatedAt = now
+					fmt.Printf("deposit to %s retries exhausted at state %s\n", wf.DepositAddr.Hex(), wf.State)
+					return sm.states.Put(ctx, wf)
+				}
+
+				if since := now.Sub(wf.UpdatedAt); since < sm.backoff(wf.Attempts) {
 					return nil
 				}
 
-				if dur := sm.backoff(workflow.Attempts); time.Since(workflow.UpdatedAt) < dur {
-					return nil
-				}
-				changed, err := sm.Transition(ctx, workflow)
+				changed, err := sm.TransitionDeposit(ctx, wf)
 				if err != nil {
-					workflow.Attempts++
-					workflow.Error = err.Error()
-					workflow.UpdatedAt = now
-					_ = sm.states.Put(ctx, workflow)
+					wf.Attempts++
+					wf.Error = err.Error()
+					wf.UpdatedAt = now
+					fmt.Printf("deposit to %s failed at state %s: %s, %d/%d attempts\n", wf.DepositAddr.Hex(), wf.State, err.Error(), wf.Attempts, sm.maxAttempts)
+					return sm.states.Put(ctx, wf)
+				}
+				if !changed {
 					return nil
 				}
-				if changed {
-					workflow.Error = ""
-					workflow.UpdatedAt = now
-					return sm.states.Put(ctx, workflow)
-				}
-				return nil
-			})
-			if err != nil {
+
+				wf.Error = ""
+				wf.UpdatedAt = now
+				return sm.states.Put(ctx, wf)
+			}); err != nil {
 				return err
 			}
 		}
@@ -113,8 +117,8 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 			return err
 		}
 
-		if account != nil {
-			amount := new(big.Int).Set(tx.Value())
+		amount := new(big.Int).Set(tx.Value())
+		if account != nil && amount.Cmp(sm.minDepositWei) > 0 {
 			deposit := &models.DepositState{
 				ID:          fmt.Sprintf("%s|%s", account.DepositAddr, tx.Hash().Hex()),
 				TxHash:      tx.Hash().Hex(),
@@ -137,38 +141,46 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 	return nil
 }
 
-func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState) (changed bool, err error) {
+func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.DepositState) (changed bool, err error) {
 	switch st.State {
-	case models.StateDiscovered:
-		// TODO: chain id is important, need to ensure we are creating tx on appropriate chain and sending on appropriate chain
-		tx, err := sm.wm.WithChain(sm.treasuryChain).BuildSendTx(ctx, sm.treasuryAddr, st.DstAddr, st.AmountWei)
+	case models.StateDiscovered, models.StateDstTxResend:
+		addr, err := sm.getHotWallet(st.DstChain)
 		if err != nil {
-			return false, fmt.Errorf("error marshaling tx: %w", err)
+			return false, err
+		}
+		tx, err := sm.wm.WithChain(st.DstChain).BuildSendTx(ctx, addr, st.DstAddr.Hex(), st.AmountWei) // TODO: convert eth wei to usdc
+		if err != nil {
+			return false, fmt.Errorf("error building tx: %v", err)
 		}
 
 		rawTxBytes, err := tx.MarshalBinary()
 		if err != nil {
-			return false, fmt.Errorf("error marshaling tx: %w", err)
+			return false, fmt.Errorf("error marshaling tx: %v", err)
 		}
 
 		st.UnsignedDstTx = common.Bytes2Hex(rawTxBytes)
-		st.State = models.StateDstTxPrepared
+		st.State = models.StateDstTxBuilt
 		return true, nil
 
-	case models.StateDstTxPrepared, models.StateDstTxRetry:
+	case models.StateDstTxBuilt:
 		var tx *types.Transaction
 		if err := tx.UnmarshalBinary(common.Hex2Bytes(st.UnsignedDstTx)); err != nil {
-			return false, fmt.Errorf("error unmarshaling tx: %w", err)
+			return false, fmt.Errorf("error unmarshaling tx: %v", err)
 		}
 
-		signed, err := sm.wm.WithChain(st.DstChain).SignTx(ctx, tx, sm.treasuryAddr)
+		addr, err := sm.getHotWallet(st.DstChain)
 		if err != nil {
-			return false, fmt.Errorf("error signing tx: %w", err)
+			return false, err
+		}
+
+		signed, err := sm.wm.WithChain(st.DstChain).SignTx(ctx, tx, addr)
+		if err != nil {
+			return false, fmt.Errorf("error signing tx: %v", err)
 		}
 
 		hash, err := sm.wm.WithChain(st.DstChain).SendTx(ctx, signed)
 		if err != nil {
-			return false, fmt.Errorf("error sending tx: %w", err)
+			return false, fmt.Errorf("error sending tx: %v", err)
 		}
 
 		st.SentDstTxHash = hash
@@ -178,7 +190,7 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 	case models.StateDstTxSent:
 		rcpt, err := sm.client.TransactionReceipt(ctx, common.HexToHash(st.SentDstTxHash))
 		if err != nil {
-			return false, fmt.Errorf("error getting receipt: %w", err)
+			return false, fmt.Errorf("error getting receipt: %v", err)
 		}
 		if rcpt.Status != types.ReceiptStatusSuccessful {
 			st.State = models.StateDstTxRejected
@@ -186,7 +198,7 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 		}
 		head, err := sm.client.BlockNumber(ctx)
 		if err != nil {
-			return false, fmt.Errorf("error getting latest block number: %w", err)
+			return false, fmt.Errorf("error getting latest block number: %v", err)
 		}
 		if head < rcpt.BlockNumber.Uint64()+sm.minConfirmations-1 {
 			return false, fmt.Errorf("need more confirmations")
@@ -194,47 +206,50 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 		st.State = models.StateDstTxConfirmed
 		return true, nil
 
-	case models.StateDstTxConfirmed, models.StateSweepTxRetry:
-		// TODO: chain id is important, need to ensure we are creating tx on appropriate chain
-		tx, err := sm.wm.WithChain(st.SrcChain).BuildSweepTx(ctx, st.DepositAddr, sm.treasuryAddr)
+	case models.StateDstTxConfirmed, models.StateSweepTxResend:
+		addr, err := sm.getHotWallet(st.SrcChain)
+		if err != nil {
+			return false, err
+		}
+		tx, err := sm.wm.WithChain(st.SrcChain).BuildSweepTx(ctx, st.DepositAddr.Hex(), addr)
 		if err != nil {
 			return false, err
 		}
 
 		rawTxBytes, err := tx.MarshalBinary()
 		if err != nil {
-			return false, fmt.Errorf("error marshaling tx: %w", err)
+			return false, fmt.Errorf("error marshaling tx: %v", err)
 		}
 
 		st.UnsignedSweepTx = common.Bytes2Hex(rawTxBytes)
 
-		st.State = models.StateSweepTxPrepared
+		st.State = models.StateSweepTxBuilt
 		return true, nil
 
-	case models.StateSweepTxPrepared:
+	case models.StateSweepTxBuilt:
 		var tx *types.Transaction
 		if err := tx.UnmarshalBinary(common.Hex2Bytes(st.UnsignedSweepTx)); err != nil {
-			return false, fmt.Errorf("error unmarshaling tx: %w", err)
+			return false, fmt.Errorf("error unmarshaling tx: %v", err)
 		}
 
-		signed, err := sm.wm.WithChain(st.SrcChain).SignTx(ctx, tx, st.DepositAddr)
+		signed, err := sm.wm.WithChain(st.SrcChain).SignTx(ctx, tx, st.DepositAddr.Hex())
 		if err != nil {
-			return false, fmt.Errorf("error signing tx: %w", err)
+			return false, fmt.Errorf("error signing tx: %v", err)
 		}
 
 		hash, err := sm.wm.WithChain(st.SrcChain).SendTx(ctx, signed)
 		if err != nil {
-			return false, fmt.Errorf("error sending tx: %w", err)
+			return false, fmt.Errorf("error sending tx: %v", err)
 		}
 
-		st.SentDstTxHash = hash
+		st.SentSweepTxHash = hash
 		st.State = models.StateSweepTxSent
 		return true, nil
 
 	case models.StateSweepTxSent:
 		rcpt, err := sm.client.TransactionReceipt(ctx, common.HexToHash(st.SentSweepTxHash))
 		if err != nil {
-			return false, fmt.Errorf("error getting receipt: %w", err)
+			return false, fmt.Errorf("error getting receipt: %v", err)
 		}
 		if rcpt.Status != types.ReceiptStatusSuccessful {
 			st.State = models.StateSweepTxRejected
@@ -242,7 +257,7 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 		}
 		head, err := sm.client.BlockNumber(ctx)
 		if err != nil {
-			return false, fmt.Errorf("error getting latest block number: %w", err)
+			return false, fmt.Errorf("error getting latest block number: %v", err)
 		}
 		if head < rcpt.BlockNumber.Uint64()+sm.minConfirmations-1 {
 			return false, fmt.Errorf("need more confirmations")
@@ -255,18 +270,26 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 		return true, nil
 
 	case models.StateDone, models.StateFailed:
-		// terminal states
 		return false, nil
 
 	case models.StateDstTxRejected:
-		st.State = models.StateDstTxRetry
+		st.State = models.StateDstTxResend
 		return true, nil
 
 	case models.StateSweepTxRejected:
-		st.State = models.StateSweepTxRetry
+		st.State = models.StateSweepTxResend
 		return true, nil
 
 	default:
 		return false, fmt.Errorf("unknown state %s", st.State)
 	}
+}
+
+func (sm *StateMachine) getHotWallet(chain models.Chain) (string, error) {
+	address, ok := sm.hotWallets[chain]
+	if !ok {
+		return "", fmt.Errorf("no hot wallet for chain %s", chain)
+	}
+
+	return address, nil
 }

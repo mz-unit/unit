@@ -3,41 +3,44 @@ package models
 import (
 	"math/big"
 	"time"
+
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type State string
 
 const (
 	StateDiscovered       State = "DISCOVERED"
-	StateDstTxPrepared    State = "DST_TX_PREPARED"
+	StateDstTxBuilt       State = "DST_TX_BUILT"
 	StateDstTxSent        State = "DST_TX_SENT"
 	StateDstTxConfirmed   State = "DST_TX_CONFIRMED"
 	StateDstTxRejected    State = "DST_TX_REJECTED"
-	StateSweepTxPrepared  State = "SWEEP_TX_PREPARED"
+	StateSweepTxBuilt     State = "SWEEP_TX_BUILT"
 	StateSweepTxSent      State = "SWEEP_TX_SENT"
 	StateSweepTxConfirmed State = "SWEEP_TX_CONFIRMED"
 	StateSweepTxRejected  State = "SWEEP_TX_REJECTED"
 	StateDone             State = "DONE"
 	StateFailed           State = "FAILED"
-	StateDstTxRetry       State = "DST_TX_RETRY"
-	StateSweepTxRetry     State = "SWEEP_TX_RETRY"
+	StateDstTxResend      State = "DST_TX_RESEND"
+	StateSweepTxResend    State = "SWEEP_TX_RESEND"
 )
 
 type DepositState struct {
-	ID              string    `json:"id"` // depositAddr:txHash
-	TxHash          string    `json:"tx_hash"`
-	DepositAddr     string    `json:"deposit_addr"`
-	DstAddr         string    `json:"dst_addr"`
-	DstChain        Chain     `json:"dst_chain"`
-	SrcChain        Chain     `json:"src_chain"`
-	AmountWei       *big.Int  `json:"amount_wei"`
-	State           State     `json:"state"`
-	UnsignedDstTx   string    `json:"unsigned_dst_tx"`
-	SentDstTxHash   string    `json:"sent_dst_tx_hash"`
-	UnsignedSweepTx string    `json:"unsigned_sweep_tx"`
-	SentSweepTxHash string    `json:"sent_sweep_tx_hash"`
-	UpdatedAt       time.Time `json:"updated_at"`
-	CreatedAt       time.Time `json:"created_at"`
-	Attempts        int       `json:"attempts"`
-	Error           string    `json:"error"`
+	ID              string         `json:"id"` // depositAddr:txHash
+	TxHash          string         `json:"tx_hash"`
+	DepositAddr     common.Address `json:"deposit_addr"`
+	DstAddr         common.Address `json:"dst_addr"`
+	DstChain        Chain          `json:"dst_chain"`
+	SrcChain        Chain          `json:"src_chain"`
+	Asset           string         `json:"asset"`
+	AmountWei       *big.Int       `json:"amount_wei"`
+	State           State          `json:"state"`
+	UnsignedDstTx   string         `json:"unsigned_dst_tx"`
+	SentDstTxHash   string         `json:"sent_dst_tx_hash"`
+	UnsignedSweepTx string         `json:"unsigned_sweep_tx"`
+	SentSweepTxHash string         `json:"sent_sweep_tx_hash"`
+	UpdatedAt       time.Time      `json:"updated_at"`
+	CreatedAt       time.Time      `json:"created_at"`
+	Attempts        int            `json:"attempts"`
+	Error           string         `json:"error"`
 }

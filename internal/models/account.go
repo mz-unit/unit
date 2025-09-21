@@ -3,41 +3,35 @@ package models
 import (
 	"fmt"
 
-	"unit/agent/internal/utils/address"
+	"github.com/ethereum/go-ethereum/common"
 )
 
 type Account struct {
-	ID          string `json:"id"`
-	SrcChain    Chain  `json:"src_chain"`
-	DstChain    Chain  `json:"dst_chain"`
-	DstAddr     string `json:"dst_addr"`
-	DepositAddr string `json:"deposit_addr"`
+	ID          string         `json:"id"`
+	SrcChain    Chain          `json:"src_chain"`
+	DstChain    Chain          `json:"dst_chain"`
+	DstAddr     common.Address `json:"dst_addr"`
+	DepositAddr common.Address `json:"deposit_addr"`
 }
 
 func NewAccount(srcChain Chain, dstChain Chain, dstAddr string, depositAddr string) (*Account, error) {
-	checksummedDst, err := address.Checksummed(dstAddr)
-	if err != nil {
-		return nil, err
+	if !common.IsHexAddress(dstAddr) {
+		return nil, fmt.Errorf("invalid destination address: %s", dstAddr)
 	}
 
-	checksummedDpst, err := address.Checksummed(depositAddr)
-	if err != nil {
-		return nil, err
+	if !common.IsHexAddress(depositAddr) {
+		return nil, fmt.Errorf("invalid deposit address: %s", depositAddr)
 	}
 
 	return &Account{
-		ID:          fmt.Sprintf("%s:%s:%s", srcChain, dstChain, checksummedDst),
+		ID:          fmt.Sprintf("%s:%s:%s", srcChain, dstChain, common.HexToAddress(dstAddr).Hex()),
 		SrcChain:    srcChain,
 		DstChain:    dstChain,
-		DstAddr:     checksummedDst,
-		DepositAddr: checksummedDpst,
+		DstAddr:     common.HexToAddress(dstAddr),
+		DepositAddr: common.HexToAddress(depositAddr),
 	}, nil
 }
 
-func AccountID(srcChain string, dstChain string, dstAddr string) (string, error) {
-	checksummedDst, err := address.Checksummed(dstAddr)
-	if err != nil {
-		return "", err
-	}
-	return fmt.Sprintf("%s:%s:%s", srcChain, dstChain, checksummedDst), nil
+func AccountID(srcChain Chain, dstChain Chain, dstAddr string) string {
+	return fmt.Sprintf("%s:%s:%s", srcChain, dstChain, common.HexToAddress(dstAddr).Hex())
 }

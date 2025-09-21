@@ -27,13 +27,13 @@ type LocalKeyStore struct {
 	passphrase     string
 }
 
-func NewLocalKeyStore(passphrase string, rootDir string, unlockDuration time.Duration) (*LocalKeyStore, error) {
+func NewLocalKeyStore(passphrase string, rootDir string) (*LocalKeyStore, error) {
 	if err := os.MkdirAll(rootDir, 0700); err != nil {
 		return nil, err
 	}
 
 	ks := keystore.NewKeyStore(rootDir, keystore.StandardScryptN, keystore.StandardScryptP)
-	return &LocalKeyStore{ks: ks, passphrase: passphrase, rootDir: rootDir, unlockDuration: unlockDuration}, nil
+	return &LocalKeyStore{ks: ks, passphrase: passphrase, rootDir: rootDir, unlockDuration: 1 * time.Minute}, nil
 }
 
 func (l *LocalKeyStore) CreateKey(ctx context.Context) (address string, err error) {
@@ -55,7 +55,7 @@ func (l *LocalKeyStore) SignTx(ctx context.Context, address string, tx *types.Tr
 	}
 
 	if err := l.ks.TimedUnlock(account, l.passphrase, l.unlockDuration); err != nil {
-		return nil, fmt.Errorf("error unlocking account: %w", err)
+		return nil, err
 	}
 	defer l.ks.Lock(account.Address)
 
@@ -73,7 +73,7 @@ func (l *LocalKeyStore) SignHash(ctx context.Context, address string, hash []byt
 	}
 
 	if err := l.ks.TimedUnlock(account, l.passphrase, l.unlockDuration); err != nil {
-		return nil, fmt.Errorf("error unlocking account: %w", err)
+		return nil, err
 	}
 	defer l.ks.Lock(account.Address)
 

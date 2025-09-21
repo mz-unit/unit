@@ -11,7 +11,7 @@ import (
 )
 
 var (
-	bucketWorkflows = []byte("workflows")
+	bucketDeposits = []byte("deposits")
 
 	ErrExecutionNotFound = errors.New("execution not found")
 )
@@ -34,8 +34,8 @@ func NewLocalStateStore(path string) (*LocalStateStore, error) {
 		return nil, err
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		if _, e := tx.CreateBucketIfNotExists(bucketWorkflows); e != nil {
-			return e
+		if _, err := tx.CreateBucketIfNotExists(bucketDeposits); err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {
@@ -47,7 +47,7 @@ func NewLocalStateStore(path string) (*LocalStateStore, error) {
 
 func (s *LocalStateStore) PutIfAbsent(ctx context.Context, job *models.DepositState) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
-		b := tx.Bucket(bucketWorkflows)
+		b := tx.Bucket(bucketDeposits)
 		if b.Get([]byte(job.ID)) != nil {
 			return nil
 		}
@@ -65,14 +65,14 @@ func (s *LocalStateStore) Put(ctx context.Context, job *models.DepositState) err
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketWorkflows).Put([]byte(job.ID), blob)
+		return tx.Bucket(bucketDeposits).Put([]byte(job.ID), blob)
 	})
 }
 
 func (s *LocalStateStore) Get(ctx context.Context, id string) (*models.DepositState, error) {
 	var out models.DepositState
 	err := s.db.View(func(tx *bolt.Tx) error {
-		v := tx.Bucket(bucketWorkflows).Get([]byte(id))
+		v := tx.Bucket(bucketDeposits).Get([]byte(id))
 		if v == nil {
 			return ErrExecutionNotFound
 		}
@@ -84,10 +84,9 @@ func (s *LocalStateStore) Get(ctx context.Context, id string) (*models.DepositSt
 	return &out, nil
 }
 
-// Scans all entries in store
 func (s *LocalStateStore) Scan(ctx context.Context, visit func(*models.DepositState) error) error {
 	return s.db.View(func(tx *bolt.Tx) error {
-		c := tx.Bucket(bucketWorkflows).Cursor()
+		c := tx.Bucket(bucketDeposits).Cursor()
 		for k, v := c.First(); k != nil; k, v = c.Next() {
 			select {
 			case <-ctx.Done():
