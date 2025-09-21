@@ -19,6 +19,8 @@ const (
 	StateSweepTxRejected  State = "SWEEP_TX_REJECTED"
 	StateDone             State = "DONE"
 	StateFailed           State = "FAILED"
+	StateDstTxRetry       State = "DST_TX_RETRY"
+	StateSweepTxRetry     State = "SWEEP_TX_RETRY"
 )
 
 type DepositState struct {
@@ -29,12 +31,12 @@ type DepositState struct {
 	DstChain        string    `json:"dst_chain"`
 	AmountWei       *big.Int  `json:"amount_wei"`
 	State           State     `json:"state"`
-	UnsignedDstTx   string    `json:"unsigned_dst_tx,omitempty"`
-	SentDstTxHash   string    `json:"sent_dst_tx_hash,omitempty"`
-	UnsignedSweepTx string    `json:"unsigned_sweep_tx,omitempty"`
-	SentSweepTxHash string    `json:"sent_sweep_tx_hash,omitempty"`
+	UnsignedDstTx   string    `json:"unsigned_dst_tx"`
+	SentDstTxHash   string    `json:"sent_dst_tx_hash"`
+	UnsignedSweepTx string    `json:"unsigned_sweep_tx"`
+	SentSweepTxHash string    `json:"sent_sweep_tx_hash"`
 	UpdatedAt       time.Time `json:"updated_at"`
 	CreatedAt       time.Time `json:"created_at"`
 	Attempts        int       `json:"attempts"`
-	Error           string    `json:"error,omitempty"`
+	Error           string    `json:"error"`
 }

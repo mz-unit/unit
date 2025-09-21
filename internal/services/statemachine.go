@@ -17,9 +17,8 @@ import (
 
 type StateMachine struct {
 	client   *ethclient.Client
-	wm       *WalletManager
+	wm       *WalletManager // TODO instantiate wallet manager per chain
 	accounts stores.AccountStore
-	keys     stores.KeyStore
 	states   stores.StateStore
 
 	treasuryAddr     string
@@ -29,11 +28,10 @@ type StateMachine struct {
 	backoff          func(n int) time.Duration
 }
 
-func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ks stores.KeyStore, ss stores.StateStore, treasuryAddr string) (*StateMachine, error) {
+func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, treasuryAddr string) (*StateMachine, error) {
 	sm := &StateMachine{
 		client:           client,
 		wm:               wm,
-		keys:             ks,
 		accounts:         as,
 		states:           ss,
 		treasuryAddr:     treasuryAddr,
@@ -58,25 +56,34 @@ func (sm *StateMachine) Start(ctx context.Context) error {
 			return ctx.Err()
 		case <-tick.C:
 			now := time.Now()
-			err := sm.states.Scan(ctx, func(deposit *models.DepositState) error {
-				if deposit.State == models.StateDone {
+			err := sm.states.Scan(ctx, func(workflow *models.DepositState) error {
+				if workflow.State == models.StateDone {
 					return nil
 				}
-				if dur := sm.backoff(deposit.Attempts); time.Since(deposit.UpdatedAt) < dur {
+
+				if workflow.Attempts == sm.maxAttempts {
+					workflow.State = models.StateFailed
+					workflow.Error = "attempts exhausted"
+					workflow.UpdatedAt = now
+					_ = sm.states.Put(ctx, workflow)
 					return nil
 				}
-				changed, err := sm.Transition(ctx, deposit)
+
+				if dur := sm.backoff(workflow.Attempts); time.Since(workflow.UpdatedAt) < dur {
+					return nil
+				}
+				changed, err := sm.Transition(ctx, workflow)
 				if err != nil {
-					deposit.Attempts++
-					deposit.Error = err.Error()
-					deposit.UpdatedAt = now
-					_ = sm.states.Put(ctx, deposit)
+					workflow.Attempts++
+					workflow.Error = err.Error()
+					workflow.UpdatedAt = now
+					_ = sm.states.Put(ctx, workflow)
 					return nil
 				}
 				if changed {
-					deposit.Error = ""
-					deposit.UpdatedAt = now
-					return sm.states.Put(ctx, deposit)
+					workflow.Error = ""
+					workflow.UpdatedAt = now
+					return sm.states.Put(ctx, workflow)
 				}
 				return nil
 			})
@@ -130,7 +137,7 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState) (bool, error) {
 	switch st.State {
 	case models.StateDiscovered:
-		// TODO: chain id is important, need to ensure we are creating tx on appropriate chain
+		// TODO: chain id is important, need to ensure we are creating tx on appropriate chain and sending on appropriate chain
 		tx, err := sm.wm.PrepareSendTx(ctx, sm.treasuryAddr, st.DstAddr, st.AmountWei)
 		if err != nil {
 			return false, err
@@ -145,7 +152,7 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 		st.State = models.StateDstTxPrepared
 		return true, nil
 
-	case models.StateDstTxPrepared:
+	case models.StateDstTxPrepared, models.StateDstTxRetry:
 		var tx *types.Transaction
 		if err := tx.UnmarshalBinary(common.Hex2Bytes(st.UnsignedDstTx)); err != nil {
 			return false, fmt.Errorf("error unmarshaling tx: %w", err)
@@ -184,7 +191,7 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 		st.State = models.StateDstTxConfirmed
 		return true, nil
 
-	case models.StateDstTxConfirmed:
+	case models.StateDstTxConfirmed, models.StateSweepTxRetry:
 		// TODO: chain id is important, need to ensure we are creating tx on appropriate chain
 		tx, err := sm.wm.PrepareSweepTx(ctx, st.DepositAddr, sm.treasuryAddr)
 		if err != nil {
@@ -249,13 +256,11 @@ func (sm *StateMachine) Transition(ctx context.Context, st *models.DepositState)
 		return false, nil
 
 	case models.StateDstTxRejected:
-		// reattempt state machine; resend destination deposit tx
-		st.State = models.StateDiscovered
+		st.State = models.StateDstTxRetry
 		return true, nil
 
 	case models.StateSweepTxRejected:
-		// reattempt state machine from sweep tx flow; resend sweep tx
-		st.State = models.StateDstTxConfirmed
+		st.State = models.StateSweepTxRetry
 		return true, nil
 
 	default:
