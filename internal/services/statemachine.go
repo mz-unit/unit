@@ -25,7 +25,6 @@ type StateMachine struct {
 	minConfirmations uint64
 	minDepositWei    *big.Int
 	maxAttempts      int
-	backoff          func(n int) time.Duration
 }
 
 func NewStateMachine(wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hl *hyperliquid.Exchange, hotWallets map[models.Chain]string) (*StateMachine, error) {
@@ -37,12 +36,8 @@ func NewStateMachine(wm *WalletManager, as stores.AccountStore, ss stores.StateS
 		hotWallets:       hotWallets,
 		interval:         2 * time.Second,
 		minConfirmations: 14, // Ethereum mainnet specific
-		maxAttempts:      5,
+		maxAttempts:      20,
 		minDepositWei:    new(big.Int).SetUint64(1000000000000000000), // .01
-		backoff: func(n int) time.Duration {
-			d := time.Duration(1<<min(n, 10)) * time.Second
-			return min(d, 2*time.Minute)
-		},
 	}
 	return sm, nil
 }
@@ -59,42 +54,64 @@ func (sm *StateMachine) Start(ctx context.Context) error {
 		case <-ticker.C:
 			now := time.Now()
 
+			depositCount := 0
+			var updates []*models.DepositState
+
 			if err := sm.states.Scan(ctx, func(wf *models.DepositState) error {
+				depositCount++
+
 				switch wf.State {
 				case models.StateDone, models.StateFailed:
 					return nil
 				}
+
+				fmt.Printf("deposit to %s current state: %s\n", wf.DepositAddr.Hex(), wf.State)
 
 				if wf.Attempts >= sm.maxAttempts {
 					wf.State = models.StateFailed
 					wf.Error = "retries exhausted"
 					wf.UpdatedAt = now
 					fmt.Printf("deposit to %s retries exhausted at state %s\n", wf.DepositAddr.Hex(), wf.State)
-					return sm.states.Put(ctx, wf)
-				}
-
-				if since := now.Sub(wf.UpdatedAt); since < sm.backoff(wf.Attempts) {
+					updates = append(updates, wf)
 					return nil
 				}
 
-				changed, err := sm.TransitionDeposit(ctx, wf)
+				next, changed, err := sm.TransitionDeposit(ctx, wf)
 				if err != nil {
 					wf.Attempts++
 					wf.Error = err.Error()
 					wf.UpdatedAt = now
-					fmt.Printf("deposit to %s failed at state %s: %s, %d/%d attempts\n", wf.DepositAddr.Hex(), wf.State, err.Error(), wf.Attempts, sm.maxAttempts)
-					return sm.states.Put(ctx, wf)
+					fmt.Printf("deposit to %s failed at state %s: %s, %d/%d attempts\n",
+						wf.DepositAddr.Hex(), wf.State, err.Error(), wf.Attempts, sm.maxAttempts)
+					updates = append(updates, wf)
+					return nil
 				}
 				if !changed {
+					wf.UpdatedAt = now
+					updates = append(updates, wf)
 					return nil
 				}
 
+				wf.State = next
+				wf.Attempts = 0
 				wf.Error = ""
 				wf.UpdatedAt = now
-				return sm.states.Put(ctx, wf)
+				fmt.Printf("deposit %s to %s transitioning to state %s\n",
+					wf.TxHash, wf.DepositAddr.Hex(), wf.State)
+				updates = append(updates, wf)
+				return nil
 			}); err != nil {
-				return err
+				fmt.Printf("scan error: %v\n", err)
+				continue
 			}
+
+			for _, update := range updates {
+				if err := sm.states.Put(ctx, update); err != nil {
+					fmt.Printf("put error: %v\n", err)
+				}
+			}
+
+			fmt.Printf("scanned %d deposits, updated %d\n", depositCount, len(updates))
 		}
 	}
 }
@@ -115,8 +132,10 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 			return err
 		}
 
+		// NOTE: no minimum deposit amount
 		amount := new(big.Int).Set(tx.Value())
-		if account != nil && amount.Cmp(sm.minDepositWei) > 0 {
+		if account != nil {
+			fmt.Printf("found deposit to: %s amount: %s\n", to.Hex(), amount.String())
 			deposit := &models.DepositState{
 				ID:          fmt.Sprintf("%s|%s", account.DepositAddr, tx.Hash().Hex()),
 				TxHash:      tx.Hash().Hex(),
@@ -135,136 +154,127 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 				return err
 			}
 
-			fmt.Printf("found deposit for address %s tx %s", account.DepositAddr, tx.Hash().Hex())
+			fmt.Printf("found deposit for address %s tx %s\n", account.DepositAddr, tx.Hash().Hex())
 		}
 	}
 	return nil
 }
 
-func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.DepositState) (changed bool, err error) {
+func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.DepositState) (next models.State, changed bool, err error) {
 	switch st.State {
+
 	case models.StateSrcTxDiscovered:
 		confirmed, err := sm.wm.WithChain(st.SrcChain).WaitForConfirmations(ctx, st.TxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
-				// user deposit was rejected, fail entire deposit
 				st.State = models.StateFailed
-				return true, nil
+				return st.State, true, nil
 			}
-			return false, fmt.Errorf("error waiting for confirmations")
+			return st.State, false, fmt.Errorf("error waiting for confirmations")
 		}
-
 		if !confirmed {
-			return false, fmt.Errorf("needs more confirmations")
+			fmt.Println("waiting for more confirmations")
+			return st.State, false, nil
 		}
-
 		st.State = models.StateSrcTxConfirmed
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateSrcTxConfirmed, models.StateDstTxResend:
 		addr, err := sm.getHotWallet(st.DstChain)
 		if err != nil {
-			return false, err
+			return st.State, false, err
 		}
-		tx, err := sm.wm.WithChain(st.DstChain).BuildSendTx(ctx, addr, st.DstAddr.Hex(), st.AmountWei) // TODO: convert eth wei to usdc
+		tx, err := sm.wm.WithChain(st.DstChain).BuildSendTx(ctx, addr, st.DstAddr.Hex(), st.AmountWei)
 		if err != nil {
-			return false, fmt.Errorf("error building tx: %v", err)
+			return st.State, false, fmt.Errorf("error building tx: %v", err)
 		}
-
 		st.UnsignedDstTx = tx
 		st.State = models.StateDstTxBuilt
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateDstTxBuilt:
 		addr, err := sm.getHotWallet(st.DstChain)
 		if err != nil {
-			return false, err
+			return st.State, false, err
 		}
-
-		hash, err := sm.wm.WithChain(st.DstChain).SendTx(ctx, st.UnsignedDstTx, addr)
+		hash, err := sm.wm.WithChain(st.DstChain).BroadcastTx(ctx, st.UnsignedDstTx, addr)
 		if err != nil {
-			return false, fmt.Errorf("error signing tx: %v", err)
+			return st.State, false, fmt.Errorf("error sending tx: %v", err)
 		}
-
 		st.SentDstTxHash = hash
 		st.State = models.StateDstTxSent
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateDstTxSent:
 		confirmed, err := sm.wm.WithChain(st.DstChain).WaitForConfirmations(ctx, st.SentDstTxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateDstTxRejected
-				return true, nil
+				return st.State, true, nil
 			}
-			return false, fmt.Errorf("error waiting for confirmations")
+			return st.State, false, fmt.Errorf("error waiting for confirmations")
 		}
-
 		if !confirmed {
-			return false, fmt.Errorf("needs more confirmations")
+			return st.State, false, fmt.Errorf("needs more confirmations")
 		}
-
 		st.State = models.StateDstTxConfirmed
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateDstTxConfirmed, models.StateSweepTxResend:
 		addr, err := sm.getHotWallet(st.SrcChain)
 		if err != nil {
-			return false, err
+			return st.State, false, err
 		}
 		tx, err := sm.wm.WithChain(st.SrcChain).BuildSweepTx(ctx, st.DepositAddr.Hex(), addr)
 		if err != nil {
-			return false, err
+			return st.State, false, err
 		}
-
 		st.UnsignedSweepTx = tx
 		st.State = models.StateSweepTxBuilt
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateSweepTxBuilt:
-		hash, err := sm.wm.WithChain(st.SrcChain).SendTx(ctx, st.UnsignedSweepTx, st.DepositAddr.Hex())
+		hash, err := sm.wm.WithChain(st.SrcChain).BroadcastTx(ctx, st.UnsignedSweepTx, st.DepositAddr.Hex())
 		if err != nil {
-			return false, fmt.Errorf("error signing tx: %v", err)
+			return st.State, false, fmt.Errorf("error sending tx: %v", err)
 		}
-
 		st.SentSweepTxHash = hash
 		st.State = models.StateSweepTxSent
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateSweepTxSent:
 		confirmed, err := sm.wm.WithChain(st.SrcChain).WaitForConfirmations(ctx, st.SentSweepTxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateSweepTxRejected
-				return true, nil
+				return st.State, true, nil
 			}
-			return false, fmt.Errorf("error waiting for confirmations")
+			return st.State, false, fmt.Errorf("error waiting for confirmations")
 		}
-
 		if !confirmed {
-			return false, fmt.Errorf("needs more confirmations")
+			fmt.Println("waiting for more confirmations")
+			return st.State, false, nil
 		}
-
 		st.State = models.StateSweepTxConfirmed
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateSweepTxConfirmed:
 		st.State = models.StateDone
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateDone, models.StateFailed:
-		return false, nil
+		return st.State, false, nil
 
 	case models.StateDstTxRejected:
 		st.State = models.StateDstTxResend
-		return true, nil
+		return st.State, true, nil
 
 	case models.StateSweepTxRejected:
 		st.State = models.StateSweepTxResend
-		return true, nil
+		return st.State, true, nil
 
 	default:
-		return false, fmt.Errorf("unknown state %s", st.State)
+		return st.State, false, fmt.Errorf("unknown state %s", st.State)
 	}
 }
 

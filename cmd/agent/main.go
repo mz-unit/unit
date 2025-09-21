@@ -9,7 +9,6 @@ import (
 	"strings"
 	"syscall"
 
-	"unit/agent/internal/api"
 	"unit/agent/internal/constants"
 	"unit/agent/internal/models"
 	"unit/agent/internal/services"
@@ -75,12 +74,13 @@ func main() {
 		models.Ethereum: ethClient,
 	}, hlHotWalletExg, hlInfo)
 	sm, err := services.NewStateMachine(wm, as, st, hlHotWalletExg, map[models.Chain]string{
-		models.Ethereum: hotWalletAddr,
+		models.Ethereum:    hotWalletAddr,
+		models.Hyperliquid: hotWalletAddr,
 	})
 	if err != nil {
 		log.Fatalf("failed to initialize state machine: %v", err)
 	}
-	a := api.NewApi(ks, as, srcChains, dstChains, assets)
+	a := services.NewApi(ks, as, srcChains, dstChains, assets)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -109,7 +109,9 @@ func main() {
 	}()
 
 	go func() {
+		fmt.Println("Starting state machine goroutine...")
 		if err := sm.Start(ctx); err != nil {
+			fmt.Printf("State machine error: %v\n", err)
 			log.Fatalf("state machine stopped: %v", err)
 		}
 	}()

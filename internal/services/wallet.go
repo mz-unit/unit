@@ -55,7 +55,7 @@ func (wm *WalletManager) WithChain(chain models.Chain) ChainCtx {
 
 type ChainCtx interface {
 	// Signs and broadcasts transaction. For a system with consensus layer, break these 2 steps up.
-	SendTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error)
+	BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error)
 	// Builds an unsigned transaction to send `amount` from `fromAddr` to `toAddr`. Used to credit a deposit on destination chain
 	BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error)
 	// Builds an unsigned transaction to send total balance (minus gas costs) from `fromAddr` to `toAddr`. Used to sweep from deposit addresses
@@ -69,7 +69,7 @@ type EvmCtx struct {
 	client *ethclient.Client
 }
 
-func (c *EvmCtx) SendTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
+func (c *EvmCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
 	var tx *types.Transaction
 	if err := tx.UnmarshalBinary(common.Hex2Bytes(rawTx)); err != nil {
 		return "", fmt.Errorf("error unmarshaling tx: %v", err)
@@ -77,17 +77,17 @@ func (c *EvmCtx) SendTx(ctx context.Context, rawTx string, fromAddr string) (has
 
 	chainID, err := c.client.NetworkID(ctx)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("NetworkID: %v", err)
 	}
 
 	signed, err := c.wm.ks.SignTx(ctx, fromAddr, tx, chainID)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("SignTx: %v", err)
 	}
 
 	err = c.client.SendTransaction(ctx, signed)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("SendTransaction: %v", err)
 	}
 
 	return signed.Hash().Hex(), nil
@@ -220,8 +220,8 @@ type HlCtx struct {
 	info     *hyperliquid.Info
 }
 
-func (c *HlCtx) SendTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
-	var action hyperliquid.UsdTransferAction
+func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
+	var action hyperliquid.SpotTransferAction
 	if err := json.Unmarshal([]byte(rawTx), &action); err != nil {
 		return "", fmt.Errorf("unmarshalling USD transfer action %v", err)
 	}
@@ -232,9 +232,10 @@ func (c *HlCtx) SendTx(ctx context.Context, rawTx string, fromAddr string) (hash
 	}
 
 	// signs and posts payload
-	response, err := c.exchange.UsdTransfer(ctx, f, action.Destination)
+	// response, err := c.exchange.UsdTransfer(ctx, f, action.Destination)
+	response, err := c.exchange.SpotTransfer(ctx, f, action.Destination, action.Token)
 	if err != nil {
-		return "", fmt.Errorf("error posting usd transfer %v", err)
+		return "", fmt.Errorf("SpotTransfer: %v", err)
 	}
 
 	return response.TxHash, nil
@@ -248,11 +249,11 @@ func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string,
 	ethValue.Quo(ethValue, new(big.Float).SetInt(divisor))
 	usdcValue := new(big.Float).Mul(ethValue, big.NewFloat(1000))
 
-	action := hyperliquid.UsdTransferAction{
+	action := hyperliquid.SpotTransferAction{
 		Type:        "usdSend",
 		Destination: toAddr,
 		Amount:      fmt.Sprintf("%.6f", usdcValue),
-		// ideally contains nonce but sdk does not expose a way to get it publicly
+		Token:       "USDC:0xeb62eee3685fc4c43992febcd9e75443", // USDC testnet token id
 	}
 	bytes, err := json.Marshal(action)
 	if err != nil {
