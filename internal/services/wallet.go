@@ -21,6 +21,7 @@ type WalletManager struct {
 	ks       stores.KeyStore
 	clients  map[models.Chain]*ethclient.Client
 	exchange *hyperliquid.Exchange
+	info     *hyperliquid.Info
 }
 
 func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client, exchange *hyperliquid.Exchange) *WalletManager {
@@ -36,6 +37,7 @@ func (wm *WalletManager) WithChain(chain models.Chain) ChainCtx {
 		return &HlCtx{
 			wm:       wm,
 			exchange: wm.exchange,
+			info:     wm.info,
 		}
 	}
 	return &EvmCtx{
@@ -144,7 +146,7 @@ func (c *EvmCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr strin
 
 	gasCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gasLimit))
 	if balance.Cmp(gasCost) <= 0 {
-		return "", fmt.Errorf("insufficient balance to cover gas")
+		return "", fmt.Errorf("insufficient balance to cover gas, balance %s gasCost %s", balance.String(), gasCost.String())
 	}
 	value := new(big.Int).Sub(balance, gasCost)
 
@@ -187,6 +189,7 @@ func (c *EvmCtx) estimateGas(ctx context.Context, from common.Address, to common
 type HlCtx struct {
 	wm       *WalletManager
 	exchange *hyperliquid.Exchange
+	info     *hyperliquid.Info
 }
 
 func (c *HlCtx) SendTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
@@ -221,6 +224,7 @@ func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string,
 		Type:        "usdSend",
 		Destination: toAddr,
 		Amount:      fmt.Sprintf("%.6f", usdcValue),
+		// ideally contains nonce but sdk does not expose a way to get it publicly
 	}
 	bytes, err := json.Marshal(action)
 	if err != nil {
@@ -232,10 +236,26 @@ func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string,
 // non functional for withdrawals currently as SDK's exchange instance takes in an account address. The exchange instance in HlCtx is the hot wallet instance.
 // would need to create a new instance of hyperliquid.Exchange with deposit address (`fromAddr`)
 func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error) {
+	response, err := c.info.SpotUserState(ctx, fromAddr)
+	if err != nil {
+		return "", fmt.Errorf("error fetching balances %v", err)
+	}
+
+	var usdcBalance string = "0.0"
+	for i := 0; i < len(response.Balances); i++ {
+		if response.Balances[i].Coin == "USDC" {
+			usdcBalance = response.Balances[i].Total
+		}
+	}
+
+	if usdcBalance == "0.0" {
+		return "", fmt.Errorf("zero balance for address %s", fromAddr)
+	}
+
 	action := hyperliquid.UsdTransferAction{
 		Type:        "usdSend",
 		Destination: toAddr,
-		Amount:      "1.11", // SDK does not seem to expose a way to get balance, hardcode for now for testing
+		Amount:      usdcBalance,
 	}
 	bytes, err := json.Marshal(action)
 	if err != nil {
