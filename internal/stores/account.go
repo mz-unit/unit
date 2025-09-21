@@ -21,6 +21,7 @@ type AccountStore interface {
 	Insert(ctx context.Context, account models.Account) error
 	Get(ctx context.Context, id string) (*models.Account, error)
 	GetByDepositAddress(ctx context.Context, address string) (*models.Account, error)
+	Close() error
 }
 
 type LocalAccountStore struct {

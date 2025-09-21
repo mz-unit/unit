@@ -20,10 +20,10 @@ type BlockPublisher struct {
 	lastFinalized uint64
 }
 
-func NewBlockListener(client *ethclient.Client, interval time.Duration) *BlockPublisher {
+func NewBlockPublisher(client *ethclient.Client) *BlockPublisher {
 	return &BlockPublisher{
 		client:        client,
-		interval:      interval,
+		interval:      2 * time.Second,
 		out:           make(chan *types.Block),
 		err:           make(chan error),
 		lastFinalized: 0,

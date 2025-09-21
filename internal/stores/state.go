@@ -21,6 +21,7 @@ type StateStore interface {
 	Put(ctx context.Context, job *models.DepositState) error
 	Get(ctx context.Context, id string) (*models.DepositState, error)
 	Scan(ctx context.Context, visit func(*models.DepositState) error) error
+	Close() error
 }
 
 type LocalStateStore struct {
