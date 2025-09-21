@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	hyperliquid "github.com/sonirico/go-hyperliquid"
 )
 
 type StateMachine struct {
@@ -20,6 +21,7 @@ type StateMachine struct {
 	wm       *WalletManager
 	accounts stores.AccountStore
 	states   stores.StateStore
+	hl       *hyperliquid.Exchange
 
 	hotWallets       map[models.Chain]string
 	interval         time.Duration
@@ -29,12 +31,13 @@ type StateMachine struct {
 	backoff          func(n int) time.Duration
 }
 
-func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hotWallets map[models.Chain]string) (*StateMachine, error) {
+func NewStateMachine(client *ethclient.Client, wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hl *hyperliquid.Exchange, hotWallets map[models.Chain]string) (*StateMachine, error) {
 	sm := &StateMachine{
 		client:           client,
 		wm:               wm,
 		accounts:         as,
 		states:           ss,
+		hl:               hl,
 		hotWallets:       hotWallets,
 		interval:         2 * time.Second,
 		minConfirmations: 14, // Ethereum mainnet specific
@@ -104,7 +107,6 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 	for _, tx := range block.Transactions() {
 		to := tx.To()
 		if to == nil {
-			// to is nil for contract deployments
 			continue
 		}
 
@@ -153,34 +155,19 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 			return false, fmt.Errorf("error building tx: %v", err)
 		}
 
-		rawTxBytes, err := tx.MarshalBinary()
-		if err != nil {
-			return false, fmt.Errorf("error marshaling tx: %v", err)
-		}
-
-		st.UnsignedDstTx = common.Bytes2Hex(rawTxBytes)
+		st.UnsignedDstTx = tx
 		st.State = models.StateDstTxBuilt
 		return true, nil
 
 	case models.StateDstTxBuilt:
-		var tx *types.Transaction
-		if err := tx.UnmarshalBinary(common.Hex2Bytes(st.UnsignedDstTx)); err != nil {
-			return false, fmt.Errorf("error unmarshaling tx: %v", err)
-		}
-
 		addr, err := sm.getHotWallet(st.DstChain)
 		if err != nil {
 			return false, err
 		}
 
-		signed, err := sm.wm.WithChain(st.DstChain).SignTx(ctx, tx, addr)
+		hash, err := sm.wm.WithChain(st.DstChain).SendTx(ctx, st.UnsignedDstTx, addr)
 		if err != nil {
 			return false, fmt.Errorf("error signing tx: %v", err)
-		}
-
-		hash, err := sm.wm.WithChain(st.DstChain).SendTx(ctx, signed)
-		if err != nil {
-			return false, fmt.Errorf("error sending tx: %v", err)
 		}
 
 		st.SentDstTxHash = hash
@@ -216,30 +203,14 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 			return false, err
 		}
 
-		rawTxBytes, err := tx.MarshalBinary()
-		if err != nil {
-			return false, fmt.Errorf("error marshaling tx: %v", err)
-		}
-
-		st.UnsignedSweepTx = common.Bytes2Hex(rawTxBytes)
-
+		st.UnsignedSweepTx = tx
 		st.State = models.StateSweepTxBuilt
 		return true, nil
 
 	case models.StateSweepTxBuilt:
-		var tx *types.Transaction
-		if err := tx.UnmarshalBinary(common.Hex2Bytes(st.UnsignedSweepTx)); err != nil {
-			return false, fmt.Errorf("error unmarshaling tx: %v", err)
-		}
-
-		signed, err := sm.wm.WithChain(st.SrcChain).SignTx(ctx, tx, st.DepositAddr.Hex())
+		hash, err := sm.wm.WithChain(st.SrcChain).SendTx(ctx, st.UnsignedSweepTx, st.DepositAddr.Hex())
 		if err != nil {
 			return false, fmt.Errorf("error signing tx: %v", err)
-		}
-
-		hash, err := sm.wm.WithChain(st.SrcChain).SendTx(ctx, signed)
-		if err != nil {
-			return false, fmt.Errorf("error sending tx: %v", err)
 		}
 
 		st.SentSweepTxHash = hash

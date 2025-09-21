@@ -12,14 +12,28 @@ import (
 	"unit/agent/internal/services"
 	"unit/agent/internal/stores"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
+	hyperliquid "github.com/sonirico/go-hyperliquid"
 )
 
 func main() {
 	sepoliaUrl := os.Getenv("SEPOLIA_RPC_URL")
 	sepoliaAddr := os.Getenv("SEPOLIA_HOT_WALLET")
-	// hlUrl := os.Getenv("HYPERLIQUID_RPC_URL")
-	// hlAddr := os.Getenv("HYPERLIQUID_HOT_WALLET")
+	hlAddr := os.Getenv("HYPERLIQUID_HOT_WALLET")
+	hlPrivKey := os.Getenv("HYPERLIQUID_PRIV_KEY")
+
+	hlClient := hyperliquid.NewClient(hyperliquid.TestnetAPIURL)
+	privateKey, _ := crypto.HexToECDSA(hlPrivKey)
+	exchange := hyperliquid.NewExchange(
+		context.Background(),
+		privateKey,
+		hyperliquid.MainnetAPIURL,
+		nil,
+		"vault-address",
+		hlAddr,
+		nil,
+	)
 
 	primaryClient, err := ethclient.Dial(sepoliaUrl)
 	if err != nil {
@@ -28,20 +42,9 @@ func main() {
 
 	publisher := services.NewBlockPublisher(primaryClient)
 
-	ks, err := stores.NewLocalKeyStore("password", "./tmp/keys")
-	if err != nil {
-		log.Fatalf("failed to initialize key store: %v", err)
-	}
-
-	as, err := stores.NewLocalAccountStore("./tmp/accounts.db")
-	if err != nil {
-		log.Fatalf("failed to initialize account store: %v", err)
-	}
-
-	st, err := stores.NewLocalStateStore("./tmp/state.db")
-	if err != nil {
-		log.Fatalf("failed to initialize state store: %v", err)
-	}
+	ks, _ := stores.NewLocalKeyStore("password", "./tmp/keys")
+	as, _ := stores.NewLocalAccountStore("./tmp/accounts.db")
+	st, _ := stores.NewLocalStateStore("./tmp/state.db")
 
 	clients := map[models.Chain]*ethclient.Client{
 		models.Ethereum: primaryClient,
@@ -50,7 +53,7 @@ func main() {
 		models.Ethereum: sepoliaAddr,
 	}
 	wm := services.NewWalletManager(ks, clients)
-	sm, err := services.NewStateMachine(primaryClient, wm, as, st, hotWallets)
+	sm, err := services.NewStateMachine(primaryClient, wm, as, st, exchange, hotWallets)
 	if err != nil {
 		log.Fatalf("failed to initialize state machine: %v", err)
 	}

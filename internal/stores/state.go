@@ -17,8 +17,8 @@ var (
 )
 
 type StateStore interface {
-	PutIfAbsent(ctx context.Context, job *models.DepositState) error
-	Put(ctx context.Context, job *models.DepositState) error
+	PutIfAbsent(ctx context.Context, state *models.DepositState) error
+	Put(ctx context.Context, state *models.DepositState) error
 	Get(ctx context.Context, id string) (*models.DepositState, error)
 	Scan(ctx context.Context, visit func(*models.DepositState) error) error
 	Close() error
@@ -45,27 +45,27 @@ func NewLocalStateStore(path string) (*LocalStateStore, error) {
 	return &LocalStateStore{db: db}, nil
 }
 
-func (s *LocalStateStore) PutIfAbsent(ctx context.Context, job *models.DepositState) error {
+func (s *LocalStateStore) PutIfAbsent(ctx context.Context, state *models.DepositState) error {
 	return s.db.Update(func(tx *bolt.Tx) error {
 		b := tx.Bucket(bucketDeposits)
-		if b.Get([]byte(job.ID)) != nil {
+		if b.Get([]byte(state.ID)) != nil {
 			return nil
 		}
-		blob, err := json.Marshal(job)
+		blob, err := json.Marshal(state)
 		if err != nil {
 			return err
 		}
-		return b.Put([]byte(job.ID), blob)
+		return b.Put([]byte(state.ID), blob)
 	})
 }
 
-func (s *LocalStateStore) Put(ctx context.Context, job *models.DepositState) error {
-	blob, err := json.Marshal(job)
+func (s *LocalStateStore) Put(ctx context.Context, state *models.DepositState) error {
+	blob, err := json.Marshal(state)
 	if err != nil {
 		return err
 	}
 	return s.db.Update(func(tx *bolt.Tx) error {
-		return tx.Bucket(bucketDeposits).Put([]byte(job.ID), blob)
+		return tx.Bucket(bucketDeposits).Put([]byte(state.ID), blob)
 	})
 }
 
@@ -93,11 +93,11 @@ func (s *LocalStateStore) Scan(ctx context.Context, visit func(*models.DepositSt
 				return ctx.Err()
 			default:
 			}
-			var job models.DepositState
-			if err := json.Unmarshal(v, &job); err != nil {
+			var state models.DepositState
+			if err := json.Unmarshal(v, &state); err != nil {
 				return err
 			}
-			if err := visit(&job); err != nil {
+			if err := visit(&state); err != nil {
 				return err
 			}
 		}

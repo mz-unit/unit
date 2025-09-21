@@ -2,8 +2,10 @@ package services
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/big"
+	"strconv"
 
 	"unit/agent/internal/models"
 	"unit/agent/internal/stores"
@@ -12,119 +14,141 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
+	hyperliquid "github.com/sonirico/go-hyperliquid"
 )
 
 type WalletManager struct {
-	ks      stores.KeyStore
-	clients map[models.Chain]*ethclient.Client
+	ks       stores.KeyStore
+	clients  map[models.Chain]*ethclient.Client
+	exchange *hyperliquid.Exchange
 }
 
-type ChainContext struct {
-	wm    *WalletManager
-	chain models.Chain
-}
-
-func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client) *WalletManager {
+func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client, exchange *hyperliquid.Exchange) *WalletManager {
 	return &WalletManager{
-		ks:      ks,
-		clients: clients,
+		ks:       ks,
+		clients:  clients,
+		exchange: exchange,
 	}
 }
 
-func (wm *WalletManager) WithChain(chain models.Chain) *ChainContext {
-	return &ChainContext{
-		wm:    wm,
-		chain: chain,
+func (wm *WalletManager) WithChain(chain models.Chain) ChainCtx {
+	if chain == models.Hyperliquid {
+		return &HlCtx{
+			wm:       wm,
+			exchange: wm.exchange,
+		}
+	}
+	return &EvmCtx{
+		wm:     wm,
+		client: wm.clients[chain],
 	}
 }
 
-func (c *ChainContext) SendTx(ctx context.Context, signedTx *types.Transaction) (hash string, err error) {
-	err = c.wm.clients[c.chain].SendTransaction(ctx, signedTx)
+type ChainCtx interface {
+	// Signs and broadcasts transaction. For a system with consensus layer, break these 2 steps up.
+	SendTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error)
+	// Builds an unsigned transaction to send `amount` from `fromAddr` to `toAddr`. Used to credit a deposit on destination chain
+	BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error)
+	// Builds an unsigned transaction to send total balance (minus gas costs) from `fromAddr` to `toAddr`. Used to sweep from deposit addresses
+	BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error)
+}
+
+type EvmCtx struct {
+	wm     *WalletManager
+	client *ethclient.Client
+}
+
+func (c *EvmCtx) SendTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
+	var tx *types.Transaction
+	if err := tx.UnmarshalBinary(common.Hex2Bytes(rawTx)); err != nil {
+		return "", fmt.Errorf("error unmarshaling tx: %v", err)
+	}
+
+	chainID, err := c.client.NetworkID(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	return signedTx.Hash().Hex(), nil
-}
-
-func (c *ChainContext) SignTx(ctx context.Context, tx *types.Transaction, fromAddr string) (signedTx *types.Transaction, err error) {
-	chainID, err := c.wm.clients[c.chain].NetworkID(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	signed, err := c.wm.ks.SignTx(ctx, fromAddr, tx, chainID)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
-	return signed, nil
+	err = c.client.SendTransaction(ctx, signed)
+	if err != nil {
+		return "", err
+	}
+
+	return signed.Hash().Hex(), nil
 }
 
-// Builds an unsigned transaction to send `amount` native tokens from `fromAddr` to `toAddr`
-func (c *ChainContext) BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (tx *types.Transaction, err error) {
+func (c *EvmCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error) {
 	if ok := c.wm.ks.HasKey(ctx, fromAddr); !ok {
-		return nil, fmt.Errorf("private key not found for %s", fromAddr)
+		return "", fmt.Errorf("private key not found for %s", fromAddr)
 	}
 
 	from := common.HexToAddress(fromAddr)
 	to := common.HexToAddress(toAddr)
 
-	nonce, err := c.wm.clients[c.chain].PendingNonceAt(ctx, from)
+	nonce, err := c.client.PendingNonceAt(ctx, from)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	balance, err := c.wm.clients[c.chain].BalanceAt(ctx, from, nil)
+	balance, err := c.client.BalanceAt(ctx, from, nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	gasPrice, gasLimit, err := c.estimateGas(ctx, from, to)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	gasCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gasLimit))
 	value := new(big.Int).Add(amount, gasCost)
 
 	if balance.Cmp(value) <= 0 {
-		return nil, fmt.Errorf("insufficient balance")
+		return "", fmt.Errorf("insufficient balance")
 	}
 
-	tx = types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
-	return tx, nil
+	tx := types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
+	rawTxBytes, err := tx.MarshalBinary()
+	if err != nil {
+		return "", fmt.Errorf("error marshaling tx: %v", err)
+	}
+
+	return common.Bytes2Hex(rawTxBytes), nil
 }
 
-// Builds an unsigned transaction to send total ETH balance (minus gas costs) from `fromAddr` to `toAddr`
-func (c *ChainContext) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (tx *types.Transaction, err error) {
+func (c *EvmCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error) {
 	if ok := c.wm.ks.HasKey(ctx, fromAddr); !ok {
-		return nil, fmt.Errorf("private key not found for %s", fromAddr)
+		return "", fmt.Errorf("private key not found for %s", fromAddr)
 	}
 
 	from := common.HexToAddress(fromAddr)
 	to := common.HexToAddress(toAddr)
 
-	nonce, err := c.wm.clients[c.chain].PendingNonceAt(ctx, from)
+	nonce, err := c.client.PendingNonceAt(ctx, from)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
-	balance, err := c.wm.clients[c.chain].BalanceAt(ctx, from, nil)
+	balance, err := c.client.BalanceAt(ctx, from, nil)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	gasPrice, gasLimit, err := c.estimateGas(ctx, from, to)
 	if err != nil {
-		return nil, err
+		return "", err
 	}
 
 	gasCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gasLimit))
 	if balance.Cmp(gasCost) <= 0 {
-		return nil, fmt.Errorf("insufficient balance to cover gas")
+		return "", fmt.Errorf("insufficient balance to cover gas")
 	}
 	value := new(big.Int).Sub(balance, gasCost)
 
-	tx = types.NewTx(&types.LegacyTx{
+	tx := types.NewTx(&types.LegacyTx{
 		Nonce:    nonce,
 		To:       &to,
 		Value:    value,
@@ -132,16 +156,22 @@ func (c *ChainContext) BuildSweepTx(ctx context.Context, fromAddr string, toAddr
 		GasPrice: gasPrice,
 		Data:     nil,
 	})
-	return tx, nil
+
+	rawTxBytes, err := tx.MarshalBinary()
+	if err != nil {
+		return "", fmt.Errorf("error marshaling tx: %v", err)
+	}
+
+	return common.Bytes2Hex(rawTxBytes), nil
 }
 
-func (c *ChainContext) estimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
-	gasPrice, err = c.wm.clients[c.chain].SuggestGasPrice(ctx)
+func (c *EvmCtx) estimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
+	gasPrice, err = c.client.SuggestGasPrice(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	gasLimit, err = c.wm.clients[c.chain].EstimateGas(ctx, ethereum.CallMsg{
+	gasLimit, err = c.client.EstimateGas(ctx, ethereum.CallMsg{
 		From:  from,
 		To:    &to,
 		Data:  nil,
@@ -152,4 +182,64 @@ func (c *ChainContext) estimateGas(ctx context.Context, from common.Address, to 
 	}
 
 	return gasPrice, gasLimit, nil
+}
+
+type HlCtx struct {
+	wm       *WalletManager
+	exchange *hyperliquid.Exchange
+}
+
+func (c *HlCtx) SendTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
+	var action hyperliquid.UsdTransferAction
+	if err := json.Unmarshal([]byte(rawTx), &action); err != nil {
+		return "", fmt.Errorf("unmarshalling USD transfer action %v", err)
+	}
+
+	f, err := strconv.ParseFloat(action.Amount, 64)
+	if err != nil {
+		return "", fmt.Errorf("invalid send amount %s", action.Amount)
+	}
+
+	// signs and posts payload
+	response, err := c.exchange.UsdTransfer(ctx, f, action.Destination)
+	if err != nil {
+		return "", fmt.Errorf("error posting usd transfer %v", err)
+	}
+
+	return response.TxHash, nil
+}
+
+func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error) {
+	// hardcoded conversion of eth wei to usdc amount for POC. Assume 0.01 ETH = 10 USDC for testing
+	divisor := new(big.Int)
+	divisor.SetString("1000000000000000000", 10) // 18 decimals
+	ethValue := new(big.Float).SetInt(amount)
+	ethValue.Quo(ethValue, new(big.Float).SetInt(divisor))
+	usdcValue := new(big.Float).Mul(ethValue, big.NewFloat(1000))
+
+	action := hyperliquid.UsdTransferAction{
+		Type:        "usdSend",
+		Destination: toAddr,
+		Amount:      fmt.Sprintf("%.6f", usdcValue),
+	}
+	bytes, err := json.Marshal(action)
+	if err != nil {
+		return "", fmt.Errorf("marshalling USD transfer action %v", err)
+	}
+	return string(bytes), nil
+}
+
+// non functional for withdrawals currently as SDK's exchange instance takes in an account address. The exchange instance in HlCtx is the hot wallet instance.
+// would need to create a new instance of hyperliquid.Exchange with deposit address (`fromAddr`)
+func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error) {
+	action := hyperliquid.UsdTransferAction{
+		Type:        "usdSend",
+		Destination: toAddr,
+		Amount:      "1.11", // SDK does not seem to expose a way to get balance, hardcode for now for testing
+	}
+	bytes, err := json.Marshal(action)
+	if err != nil {
+		return "", fmt.Errorf("marshalling USD transfer action %v", err)
+	}
+	return string(bytes), nil
 }
