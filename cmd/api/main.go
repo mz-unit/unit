@@ -53,10 +53,3 @@ func main() {
 	}
 	log.Println("server stopped")
 }
-
-func getenv(k string) string {
-	if v, ok := os.LookupEnv(k); ok {
-		return v
-	}
-	return ""
-}

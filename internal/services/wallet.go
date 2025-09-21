@@ -24,7 +24,7 @@ type WalletManager struct {
 	info     *hyperliquid.Info
 }
 
-func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client, exchange *hyperliquid.Exchange) *WalletManager {
+func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client, exchange *hyperliquid.Exchange, info *hyperliquid.Info) *WalletManager {
 	return &WalletManager{
 		ks:       ks,
 		clients:  clients,

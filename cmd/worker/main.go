@@ -23,12 +23,12 @@ func main() {
 	hlAddr := os.Getenv("HYPERLIQUID_HOT_WALLET")
 	hlPrivKey := os.Getenv("HYPERLIQUID_PRIV_KEY")
 
-	hlClient := hyperliquid.NewClient(hyperliquid.TestnetAPIURL)
+	hlInfo := hyperliquid.NewInfo(context.Background(), hyperliquid.TestnetAPIURL, true, nil, nil)
 	privateKey, _ := crypto.HexToECDSA(hlPrivKey)
-	exchange := hyperliquid.NewExchange(
+	hlExchange := hyperliquid.NewExchange(
 		context.Background(),
 		privateKey,
-		hyperliquid.MainnetAPIURL,
+		hyperliquid.TestnetAPIURL,
 		nil,
 		"vault-address",
 		hlAddr,
@@ -52,8 +52,8 @@ func main() {
 	hotWallets := map[models.Chain]string{
 		models.Ethereum: sepoliaAddr,
 	}
-	wm := services.NewWalletManager(ks, clients)
-	sm, err := services.NewStateMachine(primaryClient, wm, as, st, exchange, hotWallets)
+	wm := services.NewWalletManager(ks, clients, hlExchange, hlInfo)
+	sm, err := services.NewStateMachine(primaryClient, wm, as, st, hlExchange, hotWallets)
 	if err != nil {
 		log.Fatalf("failed to initialize state machine: %v", err)
 	}
