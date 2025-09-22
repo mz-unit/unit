@@ -218,14 +218,15 @@ type HlCtx struct {
 	hlClient  *clients.HttpClient
 }
 
-func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
+func (c *HlCtx) BroadcastTx(ctx context.Context, rawPayload string, fromAddr string) (hash string, err error) {
 	var action hlutil.SpotSendAction
-	if err := json.Unmarshal([]byte(rawTx), &action); err != nil {
+	if err := json.Unmarshal([]byte(rawPayload), &action); err != nil {
 		return "", fmt.Errorf("unmarshalling spot send action %v", err)
 	}
 
+	// constructing payload here as there are issues with serializing/deserializing big.Int values
+	// in the future introduce parsing helpers that can deal with these edge cases and use deserialized result directly to make this generalizable
 	nonce := time.Now().UnixMilli()
-
 	payloadTypes := []hlutil.TypeProperty{
 		{Name: "hyperliquidChain", Type: "string"},
 		{Name: "destination", Type: "string"},
@@ -233,13 +234,12 @@ func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) 
 		{Name: "amount", Type: "string"},
 		{Name: "time", Type: "uint64"},
 	}
-
 	actionPayload := map[string]interface{}{
 		"type":        action.Type,
 		"destination": strings.ToLower(action.Destination), // must be lowercased https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing
 		"token":       action.Token,
 		"amount":      action.Amount,
-		"time":        new(big.Int).SetUint64(uint64(nonce)),
+		"time":        new(big.Int).SetUint64(uint64(nonce)), // needs to be big.Int, otherwise signing fails
 	}
 
 	sig, err := hlutil.SignUserSignedAction(c.hlPrivKey, actionPayload, payloadTypes, action.PrimaryType, false /* isMainnet */)
@@ -259,7 +259,7 @@ func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) 
 		return "", err
 	}
 
-	var result clients.TransferResponse
+	var result clients.ExchangeResponse
 	if err := json.Unmarshal(resp, &result); err != nil {
 		return "", err
 	}
@@ -267,7 +267,8 @@ func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) 
 		return "", fmt.Errorf("api response error %v", result)
 	}
 
-	return result.TxHash, nil
+	// Hyperliquid API does not return hash
+	return "", nil
 }
 
 func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error) {

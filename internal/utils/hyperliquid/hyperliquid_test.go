@@ -175,18 +175,18 @@ func TestSignUserSignedAction_SetsFieldsAndSigns(t *testing.T) {
 		{Name: "destination", Type: "string"},
 		{Name: "token", Type: "string"},
 		{Name: "amount", Type: "string"},
-		{Name: "time", Type: "uint256"},
+		{Name: "time", Type: "uint64"},
 	}
 
 	action := map[string]interface{}{
 		"type":        "spotSend",
 		"destination": strings.ToLower("0x1111111111111111111111111111111111111111"),
-		"token":       strings.ToLower(USDCTestnet),
+		"token":       USDCTestnet,
 		"amount":      "1.5",
 		"time":        new(big.Int).SetUint64(1716531066415),
 	}
 
-	sig, err := SignUserSignedAction(priv, action, payloadTypes, "HyperliquidTransaction:SpotSend", false /* Testnet */)
+	sig, err := SignUserSignedAction(priv, action, payloadTypes, "HyperliquidTransaction:SpotSend", false)
 	if err != nil {
 		t.Fatalf("SignUserSignedAction: %v", err)
 	}

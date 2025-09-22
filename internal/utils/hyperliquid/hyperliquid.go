@@ -41,6 +41,13 @@ type Signature struct {
 	V byte   `json:"v"`
 }
 
+type Payload struct {
+	PrimaryType string                 `json:"primary_type"`
+	Types       []TypeProperty         `json:"types"`
+	Action      map[string]interface{} `json:"action"`
+	Nonce       int64                  `json:"nonce"`
+}
+
 type SpotSendAction struct {
 	PrimaryType string `json:"primary_type"`
 	Type        string `json:"type"`

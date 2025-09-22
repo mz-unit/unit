@@ -35,10 +35,6 @@ func createPrivateKey(t *testing.T) *ecdsa.PrivateKey {
 	return k
 }
 
-func mkHLClient(ts *httptest.Server) *clients.HttpClient {
-	return &clients.HttpClient{BaseURL: ts.URL, HttpClient: ts.Client()}
-}
-
 func TestChainProvider_WithChain_ReturnsCorrectCtx(t *testing.T) {
 	wm := NewChainProvider(&mocks.MockKeyStore{HasKeyResp: true}, map[models.Chain]*ethclient.Client{
 		models.Ethereum: nil,
@@ -143,7 +139,6 @@ func TestHlCtx_BroadcastTx_SendsToExchangeAndReturnsHash(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"status": "ok",
-			"txHash": "0xabc123",
 		})
 	}))
 	defer ts.Close()
@@ -172,8 +167,8 @@ func TestHlCtx_BroadcastTx_SendsToExchangeAndReturnsHash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BroadcastTx err: %v", err)
 	}
-	if hash != "0xabc123" {
-		t.Fatalf("hash = %s, want 0xabc123", hash)
+	if hash != "" {
+		t.Fatalf("hash = %s, want empty", hash)
 	}
 }
 
@@ -200,10 +195,9 @@ func TestHlCtx_IsTxConfirmed_ReturnsTrueA(t *testing.T) {
 	}
 }
 
-func TestHlCtx_BuildSendTx_Formatting(t *testing.T) {
+func TestHlCtx_BuildSendTx(t *testing.T) {
 	h := &HlCtx{hlPrivKey: createPrivateKey(t), hlClient: &clients.HttpClient{}}
 
-	// 1 ETH -> 1000.000000 USDC (with 6 decimals in string)
 	oneEth := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
 	raw, err := h.BuildSendTx(context.Background(),
 		"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
@@ -228,3 +222,5 @@ func TestHlCtx_BuildSendTx_Formatting(t *testing.T) {
 		t.Fatalf("token empty")
 	}
 }
+
+// TODO: explore using simulated backend to unit test ethclient and hyperliquid client calls more easily
