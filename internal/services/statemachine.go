@@ -11,14 +11,12 @@ import (
 	"unit/agent/internal/stores"
 
 	"github.com/ethereum/go-ethereum/core/types"
-	hyperliquid "github.com/sonirico/go-hyperliquid"
 )
 
 type StateMachine struct {
 	wm       *WalletManager
 	accounts stores.AccountStore
 	states   stores.StateStore
-	hl       *hyperliquid.Exchange
 
 	hotWallets       map[models.Chain]string
 	interval         time.Duration
@@ -27,16 +25,15 @@ type StateMachine struct {
 	maxAttempts      int
 }
 
-func NewStateMachine(wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hl *hyperliquid.Exchange, hotWallets map[models.Chain]string) (*StateMachine, error) {
+func NewStateMachine(wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hotWallets map[models.Chain]string) (*StateMachine, error) {
 	sm := &StateMachine{
 		wm:               wm,
 		accounts:         as,
 		states:           ss,
-		hl:               hl,
 		hotWallets:       hotWallets,
-		interval:         2 * time.Second,
+		interval:         5 * time.Second,
 		minConfirmations: 14, // Ethereum mainnet specific
-		maxAttempts:      20,
+		maxAttempts:      1000,
 		minDepositWei:    new(big.Int).SetUint64(1000000000000000000), // .01
 	}
 	return sm, nil
@@ -57,48 +54,48 @@ func (sm *StateMachine) Start(ctx context.Context) error {
 			depositCount := 0
 			var updates []*models.DepositState
 
-			if err := sm.states.Scan(ctx, func(wf *models.DepositState) error {
+			if err := sm.states.Scan(ctx, func(st *models.DepositState) error {
 				depositCount++
 
-				switch wf.State {
+				switch st.State {
 				case models.StateDone, models.StateFailed:
 					return nil
 				}
 
-				fmt.Printf("deposit to %s current state: %s\n", wf.DepositAddr.Hex(), wf.State)
+				fmt.Printf("deposit to %s current state: %s\n", st.DepositAddr.Hex(), st.State)
 
-				if wf.Attempts >= sm.maxAttempts {
-					wf.State = models.StateFailed
-					wf.Error = "retries exhausted"
-					wf.UpdatedAt = now
-					fmt.Printf("deposit to %s retries exhausted at state %s\n", wf.DepositAddr.Hex(), wf.State)
-					updates = append(updates, wf)
+				if st.Attempts >= sm.maxAttempts {
+					st.State = models.StateFailed
+					st.Error = "retries exhausted"
+					st.UpdatedAt = now
+					fmt.Printf("deposit to %s retries exhausted at state %s\n", st.DepositAddr.Hex(), st.State)
+					updates = append(updates, st)
 					return nil
 				}
 
-				next, changed, err := sm.TransitionDeposit(ctx, wf)
+				next, changed, err := sm.TransitionDeposit(ctx, st)
 				if err != nil {
-					wf.Attempts++
-					wf.Error = err.Error()
-					wf.UpdatedAt = now
+					st.Attempts++
+					st.Error = err.Error()
+					st.UpdatedAt = now
 					fmt.Printf("deposit to %s failed at state %s: %s, %d/%d attempts\n",
-						wf.DepositAddr.Hex(), wf.State, err.Error(), wf.Attempts, sm.maxAttempts)
-					updates = append(updates, wf)
+						st.DepositAddr.Hex(), st.State, err.Error(), st.Attempts, sm.maxAttempts)
+					updates = append(updates, st)
 					return nil
 				}
 				if !changed {
-					wf.UpdatedAt = now
-					updates = append(updates, wf)
+					st.UpdatedAt = now
+					updates = append(updates, st)
 					return nil
 				}
 
-				wf.State = next
-				wf.Attempts = 0
-				wf.Error = ""
-				wf.UpdatedAt = now
+				st.State = next
+				st.Attempts = 0
+				st.Error = ""
+				st.UpdatedAt = now
 				fmt.Printf("deposit %s to %s transitioning to state %s\n",
-					wf.TxHash, wf.DepositAddr.Hex(), wf.State)
-				updates = append(updates, wf)
+					st.TxHash, st.DepositAddr.Hex(), st.State)
+				updates = append(updates, st)
 				return nil
 			}); err != nil {
 				fmt.Printf("scan error: %v\n", err)
@@ -132,7 +129,7 @@ func (sm *StateMachine) ProcessBlock(ctx context.Context, block *types.Block) er
 			return err
 		}
 
-		// NOTE: no minimum deposit amount
+		// NOTE: no minimum deposit amount for testing
 		amount := new(big.Int).Set(tx.Value())
 		if account != nil {
 			fmt.Printf("found deposit to: %s amount: %s\n", to.Hex(), amount.String())

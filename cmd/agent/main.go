@@ -9,6 +9,7 @@ import (
 	"strings"
 	"syscall"
 
+	"unit/agent/internal/clients"
 	"unit/agent/internal/constants"
 	"unit/agent/internal/models"
 	"unit/agent/internal/services"
@@ -60,20 +61,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to parse private key: %v", err)
 	}
-	hlHotWalletExg := hyperliquid.NewExchange(
-		context.Background(),
-		privateKey,
-		hyperliquid.TestnetAPIURL,
-		nil,
-		"",
-		hotWalletAddr,
-		nil,
-	)
+	hlClient := clients.NewHyperliquidClient("https://api.hyperliquid-testnet.xyz")
 
 	wm := services.NewWalletManager(ks, map[models.Chain]*ethclient.Client{
 		models.Ethereum: ethClient,
-	}, hlHotWalletExg, hlInfo)
-	sm, err := services.NewStateMachine(wm, as, st, hlHotWalletExg, map[models.Chain]string{
+	}, hlInfo, privateKey, hlClient)
+	sm, err := services.NewStateMachine(wm, as, st, map[models.Chain]string{
 		models.Ethereum:    hotWalletAddr,
 		models.Hyperliquid: hotWalletAddr,
 	})
@@ -94,7 +87,7 @@ func main() {
 	}()
 
 	go func() {
-		log.Println("API listening on :8000")
+		log.Println("api listening on :8000")
 		if err := a.Start(); err != nil {
 			if err.Error() != "http: Server closed" {
 				log.Fatalf("server error: %v", err)
@@ -103,13 +96,14 @@ func main() {
 	}()
 
 	go func() {
+		fmt.Println("starting block publisher")
 		if err := publisher.Start(ctx); err != nil {
 			log.Fatalf("block publisher stopped: %v", err)
 		}
 	}()
 
 	go func() {
-		fmt.Println("Starting state machine goroutine...")
+		fmt.Println("starting state machine")
 		if err := sm.Start(ctx); err != nil {
 			fmt.Printf("State machine error: %v\n", err)
 			log.Fatalf("state machine stopped: %v", err)

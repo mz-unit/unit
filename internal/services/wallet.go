@@ -2,15 +2,18 @@ package services
 
 import (
 	"context"
+	"crypto/ecdsa"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
-	"strconv"
+	"strings"
 	"time"
 
+	"unit/agent/internal/clients"
 	"unit/agent/internal/models"
 	"unit/agent/internal/stores"
+	hlutil "unit/agent/internal/utils/hyperliquid"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -24,27 +27,30 @@ var (
 )
 
 type WalletManager struct {
-	ks       stores.KeyStore
-	clients  map[models.Chain]*ethclient.Client
-	exchange *hyperliquid.Exchange
-	info     *hyperliquid.Info
+	ks        stores.KeyStore
+	clients   map[models.Chain]*ethclient.Client
+	info      *hyperliquid.Info
+	hlPrivKey *ecdsa.PrivateKey
+	hlClient  *clients.HyperliquidClient
 }
 
-func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client, exchange *hyperliquid.Exchange, info *hyperliquid.Info) *WalletManager {
+func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client, info *hyperliquid.Info, privKey *ecdsa.PrivateKey, hlClient *clients.HyperliquidClient) *WalletManager {
 	return &WalletManager{
-		ks:       ks,
-		clients:  clients,
-		exchange: exchange,
-		info:     info,
+		ks:        ks,
+		clients:   clients,
+		info:      info,
+		hlPrivKey: privKey,
+		hlClient:  hlClient,
 	}
 }
 
 func (wm *WalletManager) WithChain(chain models.Chain) ChainCtx {
 	if chain == models.Hyperliquid {
 		return &HlCtx{
-			wm:       wm,
-			exchange: wm.exchange,
-			info:     wm.info,
+			wm:        wm,
+			info:      wm.info,
+			hlPrivKey: wm.hlPrivKey,
+			hlClient:  wm.hlClient,
 		}
 	}
 	return &EvmCtx{
@@ -215,30 +221,62 @@ func (c *EvmCtx) estimateGas(ctx context.Context, from common.Address, to common
 }
 
 type HlCtx struct {
-	wm       *WalletManager
-	exchange *hyperliquid.Exchange
-	info     *hyperliquid.Info
+	wm        *WalletManager
+	info      *hyperliquid.Info
+	hlPrivKey *ecdsa.PrivateKey
+	hlClient  *clients.HyperliquidClient
 }
 
 func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
-	var action hyperliquid.SpotTransferAction
+	var action hlutil.SpotSendAction
 	if err := json.Unmarshal([]byte(rawTx), &action); err != nil {
 		return "", fmt.Errorf("unmarshalling USD transfer action %v", err)
 	}
 
-	f, err := strconv.ParseFloat(action.Amount, 64)
-	if err != nil {
-		return "", fmt.Errorf("invalid send amount %s", action.Amount)
+	nonce := time.Now().UnixMilli()
+
+	payloadTypes := []hlutil.TypeProperty{
+		{Name: "hyperliquidChain", Type: "string"},
+		{Name: "destination", Type: "string"},
+		{Name: "token", Type: "string"},
+		{Name: "amount", Type: "string"},
+		{Name: "time", Type: "uint64"},
 	}
 
-	// signs and posts payload
-	// response, err := c.exchange.UsdTransfer(ctx, f, action.Destination)
-	response, err := c.exchange.SpotTransfer(ctx, f, action.Destination, action.Token)
-	if err != nil {
-		return "", fmt.Errorf("SpotTransfer: %v", err)
+	actionPayload := map[string]interface{}{
+		"type":        action.Type,
+		"destination": strings.ToLower(action.Destination), // must be lowercased https://hyperliquid.gitbook.io/hyperliquid-docs/for-developers/api/signing
+		"token":       action.Token,
+		"amount":      action.Amount,
+		"time":        new(big.Int).SetUint64(uint64(nonce)),
 	}
 
-	return response.TxHash, nil
+	sig, err := hlutil.SignUserSignedAction(c.hlPrivKey, actionPayload, payloadTypes, action.PrimaryType, false /* isMainnet */)
+	if err != nil {
+		return "", fmt.Errorf("SignUserSignedAction: %v", err)
+	}
+
+	payload := map[string]any{
+		"action":    actionPayload,
+		"nonce":     nonce,
+		"signature": *sig,
+	}
+
+	resp, err := c.hlClient.Post(ctx, "/exchange", payload)
+
+	if err != nil {
+		return "", err
+	}
+
+	var result clients.TransferResponse
+	if err := json.Unmarshal(resp, &result); err != nil {
+		return "", err
+	}
+	if result.Status != "ok" {
+		return "", fmt.Errorf("api response error %v", result)
+	}
+
+	return result.TxHash, nil
 }
 
 func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error) {
@@ -249,11 +287,12 @@ func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string,
 	ethValue.Quo(ethValue, new(big.Float).SetInt(divisor))
 	usdcValue := new(big.Float).Mul(ethValue, big.NewFloat(1000))
 
-	action := hyperliquid.SpotTransferAction{
-		Type:        "usdSend",
-		Destination: toAddr,
+	action := hlutil.SpotSendAction{
+		PrimaryType: "HyperliquidTransaction:SpotSend",
+		Type:        "spotSend",
+		Destination: strings.ToLower(toAddr),
 		Amount:      fmt.Sprintf("%.6f", usdcValue),
-		Token:       "USDC:0xeb62eee3685fc4c43992febcd9e75443", // USDC testnet token id
+		Token:       hlutil.USDCTestnet,
 	}
 	bytes, err := json.Marshal(action)
 	if err != nil {
@@ -262,8 +301,6 @@ func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string,
 	return string(bytes), nil
 }
 
-// non functional for withdrawals currently as SDK's exchange instance takes in an account address. The exchange instance in HlCtx is the hot wallet instance.
-// would need to create a new instance of hyperliquid.Exchange with deposit address (`fromAddr`)
 func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error) {
 	response, err := c.info.SpotUserState(ctx, fromAddr)
 	if err != nil {
@@ -281,14 +318,16 @@ func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string
 		return "", fmt.Errorf("zero balance for address %s", fromAddr)
 	}
 
-	action := hyperliquid.UsdTransferAction{
-		Type:        "usdSend",
+	action := hlutil.SpotSendAction{
+		PrimaryType: "HyperliquidTransaction:SpotSend",
+		Type:        "spotSend",
 		Destination: toAddr,
 		Amount:      usdcBalance,
+		Token:       hlutil.USDCTestnet,
 	}
 	bytes, err := json.Marshal(action)
 	if err != nil {
-		return "", fmt.Errorf("marshalling USD transfer action %v", err)
+		return "", fmt.Errorf("marshalling spot send action %v", err)
 	}
 	return string(bytes), nil
 }
