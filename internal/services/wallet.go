@@ -67,7 +67,7 @@ type ChainCtx interface {
 	// Builds an unsigned transaction to send total balance (minus gas costs) from `fromAddr` to `toAddr`. Used to sweep from deposit addresses
 	BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error)
 	// Waits for `minConfirmations` confirmations for transaction `txHash`
-	WaitForConfirmations(ctx context.Context, txHash string, minConfirmations uint64) (bool, error)
+	IsTxConfirmed(ctx context.Context, txHash string, minConfirmations uint64) (bool, error)
 }
 
 type EvmCtx struct {
@@ -76,7 +76,7 @@ type EvmCtx struct {
 }
 
 func (c *EvmCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
-	var tx *types.Transaction
+	tx := new(types.Transaction)
 	if err := tx.UnmarshalBinary(common.Hex2Bytes(rawTx)); err != nil {
 		return "", fmt.Errorf("error unmarshaling tx: %v", err)
 	}
@@ -116,19 +116,19 @@ func (c *EvmCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string
 		return "", err
 	}
 
-	gasPrice, gasLimit, err := c.estimateGas(ctx, from, to)
+	gasPrice, gasLimit, err := c.estimateGas(ctx, from, to, amount)
 	if err != nil {
 		return "", err
 	}
 
 	gasCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gasLimit))
-	value := new(big.Int).Add(amount, gasCost)
-
-	if balance.Cmp(value) <= 0 {
-		return "", fmt.Errorf("insufficient balance")
+	total := new(big.Int).Add(amount, gasCost)
+	if balance.Cmp(total) < 0 {
+		return "", fmt.Errorf("insufficient balance: have %s, need %s",
+			balance.String(), total.String())
 	}
 
-	tx := types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
+	tx := types.NewTransaction(nonce, to, amount, gasLimit, gasPrice, nil)
 	rawTxBytes, err := tx.MarshalBinary()
 	if err != nil {
 		return "", fmt.Errorf("error marshaling tx: %v", err)
@@ -137,11 +137,7 @@ func (c *EvmCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string
 	return common.Bytes2Hex(rawTxBytes), nil
 }
 
-func (c *EvmCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error) {
-	if ok := c.wm.ks.HasKey(ctx, fromAddr); !ok {
-		return "", fmt.Errorf("private key not found for %s", fromAddr)
-	}
-
+func (c *EvmCtx) BuildSweepTx(ctx context.Context, fromAddr, toAddr string) (string, error) {
 	from := common.HexToAddress(fromAddr)
 	to := common.HexToAddress(toAddr)
 
@@ -149,40 +145,33 @@ func (c *EvmCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr strin
 	if err != nil {
 		return "", err
 	}
+
 	balance, err := c.client.BalanceAt(ctx, from, nil)
 	if err != nil {
 		return "", err
 	}
 
-	gasPrice, gasLimit, err := c.estimateGas(ctx, from, to)
+	gasPrice, err := c.client.SuggestGasPrice(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	gasCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(gasLimit))
+	const ethTransferGas = uint64(21000)
+	gasCost := new(big.Int).Mul(gasPrice, new(big.Int).SetUint64(ethTransferGas))
 	if balance.Cmp(gasCost) <= 0 {
-		return "", fmt.Errorf("insufficient balance to cover gas, balance %s gasCost %s", balance.String(), gasCost.String())
+		return "", fmt.Errorf("insufficient balance: have %s need %s", balance, gasCost)
 	}
 	value := new(big.Int).Sub(balance, gasCost)
 
-	tx := types.NewTx(&types.LegacyTx{
-		Nonce:    nonce,
-		To:       &to,
-		Value:    value,
-		Gas:      gasLimit,
-		GasPrice: gasPrice,
-		Data:     nil,
-	})
-
-	rawTxBytes, err := tx.MarshalBinary()
+	tx := types.NewTransaction(nonce, to, value, ethTransferGas, gasPrice, nil)
+	raw, err := tx.MarshalBinary()
 	if err != nil {
-		return "", fmt.Errorf("error marshaling tx: %v", err)
+		return "", fmt.Errorf("marshal tx: %w", err)
 	}
-
-	return common.Bytes2Hex(rawTxBytes), nil
+	return common.Bytes2Hex(raw), nil
 }
 
-func (c *EvmCtx) WaitForConfirmations(ctx context.Context, txHash string, minConfirmations uint64) (bool, error) {
+func (c *EvmCtx) IsTxConfirmed(ctx context.Context, txHash string, minConfirmations uint64) (bool, error) {
 	rcpt, err := c.client.TransactionReceipt(ctx, common.HexToHash(txHash))
 	if err != nil {
 		return false, fmt.Errorf("error getting receipt: %v", err)
@@ -201,22 +190,20 @@ func (c *EvmCtx) WaitForConfirmations(ctx context.Context, txHash string, minCon
 	return true, nil
 }
 
-func (c *EvmCtx) estimateGas(ctx context.Context, from common.Address, to common.Address) (gasPrice *big.Int, gasLimit uint64, err error) {
+func (c *EvmCtx) estimateGas(ctx context.Context, from, to common.Address, value *big.Int) (gasPrice *big.Int, gasLimit uint64, err error) {
 	gasPrice, err = c.client.SuggestGasPrice(ctx)
 	if err != nil {
 		return nil, 0, err
 	}
-
 	gasLimit, err = c.client.EstimateGas(ctx, ethereum.CallMsg{
 		From:  from,
 		To:    &to,
 		Data:  nil,
-		Value: big.NewInt(1e18),
+		Value: value,
 	})
 	if err != nil {
 		return nil, 0, err
 	}
-
 	return gasPrice, gasLimit, nil
 }
 
@@ -230,7 +217,7 @@ type HlCtx struct {
 func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {
 	var action hlutil.SpotSendAction
 	if err := json.Unmarshal([]byte(rawTx), &action); err != nil {
-		return "", fmt.Errorf("unmarshalling USD transfer action %v", err)
+		return "", fmt.Errorf("unmarshalling spot send action %v", err)
 	}
 
 	nonce := time.Now().UnixMilli()
@@ -332,7 +319,7 @@ func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string
 	return string(bytes), nil
 }
 
-func (c *HlCtx) WaitForConfirmations(ctx context.Context, txHash string, minConfirmations uint64) (bool, error) {
+func (c *HlCtx) IsTxConfirmed(ctx context.Context, txHash string, minConfirmations uint64) (bool, error) {
 	// hyperliquid core has one block finality with block times of 200ms.
 	// for this POC effectively consider transfer finalized after 200ms, for correctess we need a way to get core's block number
 	time.Sleep(200 * time.Millisecond)

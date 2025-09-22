@@ -105,7 +105,6 @@ func main() {
 	go func() {
 		fmt.Println("starting state machine")
 		if err := sm.Start(ctx); err != nil {
-			fmt.Printf("State machine error: %v\n", err)
 			log.Fatalf("state machine stopped: %v", err)
 		}
 	}()

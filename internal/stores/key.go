@@ -18,7 +18,6 @@ type KeyStore interface {
 	CreateKey(ctx context.Context) (address string, err error)
 	HasKey(ctx context.Context, address string) bool
 	SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)
-	SignHash(ctx context.Context, address string, hash []byte) ([]byte, error)
 }
 
 type LocalKeyStore struct {

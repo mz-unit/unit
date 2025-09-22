@@ -62,8 +62,6 @@ func (sm *StateMachine) Start(ctx context.Context) error {
 					return nil
 				}
 
-				fmt.Printf("deposit to %s current state: %s\n", st.DepositAddr.Hex(), st.State)
-
 				if st.Attempts >= sm.maxAttempts {
 					st.State = models.StateFailed
 					st.Error = "retries exhausted"
@@ -107,8 +105,6 @@ func (sm *StateMachine) Start(ctx context.Context) error {
 					fmt.Printf("put error: %v\n", err)
 				}
 			}
-
-			fmt.Printf("scanned %d deposits, updated %d\n", depositCount, len(updates))
 		}
 	}
 }
@@ -161,16 +157,16 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 	switch st.State {
 
 	case models.StateSrcTxDiscovered:
-		confirmed, err := sm.wm.WithChain(st.SrcChain).WaitForConfirmations(ctx, st.TxHash, sm.minConfirmations)
+		confirmed, err := sm.wm.WithChain(st.SrcChain).IsTxConfirmed(ctx, st.TxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateFailed
 				return st.State, true, nil
 			}
-			return st.State, false, fmt.Errorf("error waiting for confirmations")
+			return st.State, false, fmt.Errorf("error getting confirmation status %v", err)
 		}
 		if !confirmed {
-			fmt.Println("waiting for more confirmations")
+			fmt.Printf("waiting for confirmations: %s\n", st.TxHash)
 			return st.State, false, nil
 		}
 		st.State = models.StateSrcTxConfirmed
@@ -203,16 +199,17 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		return st.State, true, nil
 
 	case models.StateDstTxSent:
-		confirmed, err := sm.wm.WithChain(st.DstChain).WaitForConfirmations(ctx, st.SentDstTxHash, sm.minConfirmations)
+		confirmed, err := sm.wm.WithChain(st.DstChain).IsTxConfirmed(ctx, st.SentDstTxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateDstTxRejected
 				return st.State, true, nil
 			}
-			return st.State, false, fmt.Errorf("error waiting for confirmations")
+			return st.State, false, fmt.Errorf("error getting confirmation status %v", err)
 		}
 		if !confirmed {
-			return st.State, false, fmt.Errorf("needs more confirmations")
+			fmt.Printf("waiting for confirmations: %s\n", st.SentDstTxHash)
+			return st.State, false, nil
 		}
 		st.State = models.StateDstTxConfirmed
 		return st.State, true, nil
@@ -240,16 +237,16 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		return st.State, true, nil
 
 	case models.StateSweepTxSent:
-		confirmed, err := sm.wm.WithChain(st.SrcChain).WaitForConfirmations(ctx, st.SentSweepTxHash, sm.minConfirmations)
+		confirmed, err := sm.wm.WithChain(st.SrcChain).IsTxConfirmed(ctx, st.SentSweepTxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateSweepTxRejected
 				return st.State, true, nil
 			}
-			return st.State, false, fmt.Errorf("error waiting for confirmations")
+			return st.State, false, fmt.Errorf("error getting confirmation status %v", err)
 		}
 		if !confirmed {
-			fmt.Println("waiting for more confirmations")
+			fmt.Printf("waiting for confirmations: %s\n", st.SentSweepTxHash)
 			return st.State, false, nil
 		}
 		st.State = models.StateSweepTxConfirmed

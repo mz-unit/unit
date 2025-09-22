@@ -88,10 +88,10 @@ func TestSignTx_SetsFromCorrectly(t *testing.T) {
 	nonce := uint64(0)
 	value := big.NewInt(12345)
 	gasLimit := uint64(21000)
-	gasPrice := big.NewInt(1_000_000_000) // 1 gwei
+	gasPrice := big.NewInt(1_000_000_000)
 	tx := types.NewTransaction(nonce, to, value, gasLimit, gasPrice, nil)
 
-	chainID := big.NewInt(1) // mainnet signer works fine locally for verification
+	chainID := big.NewInt(1)
 
 	signedTx, err := ks.SignTx(ctx, addrHex, tx, chainID)
 	if err != nil {

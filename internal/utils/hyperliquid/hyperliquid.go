@@ -114,7 +114,7 @@ func SignInner(priv *ecdsa.PrivateKey, td TypedData) (*Signature, error) {
 		return nil, err
 	}
 
-	raw := make([]byte, 0, 2+32+32)
+	raw := make([]byte, 0, 66)
 	raw = append(raw, 0x19, 0x01)
 	raw = append(raw, domainSep[:]...)
 	raw = append(raw, msgHash[:]...)

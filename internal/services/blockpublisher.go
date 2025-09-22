@@ -73,7 +73,6 @@ func (bp *BlockPublisher) Start(ctx context.Context) error {
 				continue
 			}
 
-			// publish all blocks between lastBlock and current
 			for n := bp.lastBlock + 1; n <= current; n++ {
 				if err := bp.publishBlock(ctx, n); err != nil {
 					select {
