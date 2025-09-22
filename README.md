@@ -32,7 +32,6 @@ Builds transaction payloads, signs and broadcasts transactions.
 - All private key access and signing operations are strictly confined to TEE instances.
 -	Blue/green deploys with health checks and automatic failover.
 -	Shared VPC with restricted ingress, only API server accepts external requests.
-- Load balance RPC requests across multiple providers
 
 ### Limitations
 - Local keystore for private key management. In production use AWS KMS or similar.
@@ -50,8 +49,8 @@ State diagram (as implemented)
 ### Error and failure handling
 - State machine goes down -> recover from append only state transition event log. Write "intent" states before committing to an action. All state transitions are designed to be idempotent - for example before broadcasting a transaction, store its hash and ensure hash was not already submitted.
 - Block publisher crashes handled with checkpointing system. Idempotent downstream consumer means we can safely replay blocks if needed.
-- Transactions can revert, the state machine has transaction retry flows. This will reset the state machine back to transaction building steps.
-- External dependencies can go down - namely RPC providers and APIs like Hyperliquid's API. Our workflow execution engine implements retries and expontential backoff+jitter to handle these failures. We can introduce a reconciliation service to run periodically for failed workflows.
+- Transactions can revert, the state machine has transaction retry flows. This will reset the state machine back to transaction building steps to build a new transaction payload to execute the required action.
+- External dependencies can go down - namely RPC providers and APIs like Hyperliquid's API. Our workflow execution engine implements retries and expontential backoff+jitter to handle these failures. We can introduce a reconciliation service to run periodically for failed workflows. For additional resiliency, load balance RPC requests across multiple providers. 
 - Transactions may be reorged. State machine has steps to wait for a configurable number of confirmations before continuing other actions. Tradeoff is deposits may take a while, but our options are limited here. If we don't wait for finalization, there's a small possibility that the user's initial deposit in the deposit address gets reorged out on one chain, but we've already credited the destination account and can no longer sweep funds out of the deposit address.
 
 ### Implementing consensus
@@ -79,7 +78,6 @@ Security model is built on core principles of isolation, least privilege, and au
 #### Dev processes
 - Role based access control (RBAC) for interacting with cloud resources. Admin priveleges are on a per grant basis and actions are logged and monitored. Alerting set up on production resources. Limits blast radius of social engineering/phishing attacks.
 - Validate external dependencies. Run vulnerability checks in CI/CD. We have tools to detect tampering, but ultimately we cannot prevent social engineering attacks like what happend with npm recently, we should assume that this will happen eventually. Minimizing external package usage and generally perferring standard Go libraries reduces our risk here.
-- Regular penetration testing.
 
 #### How would you attack Unit's current system?
 - Endpoints take 2-3+ seconds to respond and there doesn't seem to be any caching on endpoints like estimate-fees. I would attempt overload the system with repeated calls to these endpoints to try to build up open connections and potentially exhaust resources within the service. For example, create millions of deposit addresses. This will likely only disrupt or halt the service.
