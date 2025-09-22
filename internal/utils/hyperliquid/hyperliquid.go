@@ -41,19 +41,13 @@ type Signature struct {
 	V byte   `json:"v"`
 }
 
-type Payload struct {
-	PrimaryType string                 `json:"primary_type"`
-	Types       []TypeProperty         `json:"types"`
-	Action      map[string]interface{} `json:"action"`
-	Nonce       int64                  `json:"nonce"`
-}
-
 type SpotSendAction struct {
 	PrimaryType string `json:"primary_type"`
 	Type        string `json:"type"`
 	Destination string `json:"destination"`
 	Amount      string `json:"amount"`
 	Token       string `json:"token"`
+	Nonce       uint64 `json:"nonce"`
 }
 
 func SignUserSignedAction(priv *ecdsa.PrivateKey, action map[string]interface{}, payloadTypes []TypeProperty, primaryType string, isMainnet bool) (*Signature, error) {

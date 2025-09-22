@@ -222,5 +222,3 @@ func TestHlCtx_BuildSendTx(t *testing.T) {
 		t.Fatalf("token empty")
 	}
 }
-
-// TODO: explore using simulated backend to unit test ethclient and hyperliquid client calls more easily

@@ -279,12 +279,15 @@ func (c *HlCtx) BuildSendTx(ctx context.Context, fromAddr string, toAddr string,
 	ethValue.Quo(ethValue, new(big.Float).SetInt(divisor))
 	usdcValue := new(big.Float).Mul(ethValue, big.NewFloat(1000))
 
+	nonce := time.Now().UnixMilli()
+
 	action := hlutil.SpotSendAction{
 		PrimaryType: "HyperliquidTransaction:SpotSend",
 		Type:        "spotSend",
 		Destination: strings.ToLower(toAddr),
 		Amount:      fmt.Sprintf("%.6f", usdcValue),
 		Token:       hlutil.USDCTestnet,
+		Nonce:       uint64(nonce),
 	}
 	bytes, err := json.Marshal(action)
 	if err != nil {
@@ -310,12 +313,15 @@ func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string
 		return "", fmt.Errorf("zero balance for address %s", fromAddr)
 	}
 
+	nonce := time.Now().UnixMilli()
+
 	action := hlutil.SpotSendAction{
 		PrimaryType: "HyperliquidTransaction:SpotSend",
 		Type:        "spotSend",
 		Destination: toAddr,
 		Amount:      usdcBalance,
 		Token:       hlutil.USDCTestnet,
+		Nonce:       uint64(nonce),
 	}
 	bytes, err := json.Marshal(action)
 	if err != nil {
