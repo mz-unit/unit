@@ -17,7 +17,7 @@ var (
 	ErrAccountNotFound = errors.New("account not found")
 )
 
-type AccountStore interface {
+type IAccountStore interface {
 	Insert(ctx context.Context, account models.Account) error
 	Get(ctx context.Context, id string) (*models.Account, error)
 	GetByDepositAddress(ctx context.Context, address string) (*models.Account, error)

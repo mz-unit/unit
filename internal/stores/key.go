@@ -14,7 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 )
 
-type KeyStore interface {
+type IKeyStore interface {
 	CreateKey(ctx context.Context) (address string, err error)
 	HasKey(ctx context.Context, address string) bool
 	SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error)

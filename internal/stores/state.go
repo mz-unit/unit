@@ -16,7 +16,7 @@ var (
 	ErrExecutionNotFound = errors.New("execution not found")
 )
 
-type StateStore interface {
+type IStateStore interface {
 	PutIfAbsent(ctx context.Context, state *models.DepositState) error
 	Put(ctx context.Context, state *models.DepositState) error
 	Get(ctx context.Context, id string) (*models.DepositState, error)

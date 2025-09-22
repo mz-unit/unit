@@ -26,16 +26,20 @@ var (
 	ErrorRejectedTransaction = errors.New("rejected transaction")
 )
 
-type WalletManager struct {
-	ks        stores.KeyStore
+type IChainProvider interface {
+	WithChain(chain models.Chain) ChainCtx
+}
+
+type ChainProvider struct {
+	ks        stores.IKeyStore
 	clients   map[models.Chain]*ethclient.Client
 	info      *hyperliquid.Info
 	hlPrivKey *ecdsa.PrivateKey
-	hlClient  *clients.HyperliquidClient
+	hlClient  *clients.HttpClient
 }
 
-func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Client, info *hyperliquid.Info, privKey *ecdsa.PrivateKey, hlClient *clients.HyperliquidClient) *WalletManager {
-	return &WalletManager{
+func NewChainProvider(ks stores.IKeyStore, clients map[models.Chain]*ethclient.Client, info *hyperliquid.Info, privKey *ecdsa.PrivateKey, hlClient *clients.HttpClient) *ChainProvider {
+	return &ChainProvider{
 		ks:        ks,
 		clients:   clients,
 		info:      info,
@@ -44,7 +48,7 @@ func NewWalletManager(ks stores.KeyStore, clients map[models.Chain]*ethclient.Cl
 	}
 }
 
-func (wm *WalletManager) WithChain(chain models.Chain) ChainCtx {
+func (wm *ChainProvider) WithChain(chain models.Chain) ChainCtx {
 	if chain == models.Hyperliquid {
 		return &HlCtx{
 			wm:        wm,
@@ -66,12 +70,12 @@ type ChainCtx interface {
 	BuildSendTx(ctx context.Context, fromAddr string, toAddr string, amount *big.Int) (rawTx string, err error)
 	// Builds an unsigned transaction to send total balance (minus gas costs) from `fromAddr` to `toAddr`. Used to sweep from deposit addresses
 	BuildSweepTx(ctx context.Context, fromAddr string, toAddr string) (rawTx string, err error)
-	// Waits for `minConfirmations` confirmations for transaction `txHash`
+	// Waits for `minConfirmations` confirmations on `txHash`
 	IsTxConfirmed(ctx context.Context, txHash string, minConfirmations uint64) (bool, error)
 }
 
 type EvmCtx struct {
-	wm     *WalletManager
+	wm     *ChainProvider
 	client *ethclient.Client
 }
 
@@ -208,10 +212,10 @@ func (c *EvmCtx) estimateGas(ctx context.Context, from, to common.Address, value
 }
 
 type HlCtx struct {
-	wm        *WalletManager
+	wm        *ChainProvider
 	info      *hyperliquid.Info
 	hlPrivKey *ecdsa.PrivateKey
-	hlClient  *clients.HyperliquidClient
+	hlClient  *clients.HttpClient
 }
 
 func (c *HlCtx) BroadcastTx(ctx context.Context, rawTx string, fromAddr string) (hash string, err error) {

@@ -10,9 +10,10 @@ import (
 )
 
 type MockKeyStore struct {
-	Addr   string
-	Err    error
-	Called int
+	Addr       string
+	HasKeyResp bool
+	Err        error
+	Called     int
 }
 
 func (f *MockKeyStore) CreateKey(ctx context.Context) (string, error) {
@@ -20,7 +21,7 @@ func (f *MockKeyStore) CreateKey(ctx context.Context) (string, error) {
 	return f.Addr, f.Err
 }
 func (f *MockKeyStore) HasKey(ctx context.Context, addr string) bool {
-	return addr == f.Addr
+	return addr == f.Addr || f.HasKeyResp
 }
 func (f *MockKeyStore) SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
 	return tx, nil
@@ -28,6 +29,7 @@ func (f *MockKeyStore) SignTx(ctx context.Context, address string, tx *types.Tra
 
 type MockAccountStore struct {
 	GetFn     func(ctx context.Context, id string) (*models.Account, error)
+	ByAddr    map[string]*models.Account
 	InsertFn  func(ctx context.Context, a models.Account) error
 	Inserted  *models.Account
 	InsertErr error
@@ -48,8 +50,11 @@ func (f *MockAccountStore) Insert(ctx context.Context, a models.Account) error {
 	return f.InsertErr
 }
 func (f *MockAccountStore) GetByDepositAddress(ctx context.Context, address string) (*models.Account, error) {
-	if f.GetFn != nil {
-		return f.GetFn(ctx, address)
+	if f.ByAddr != nil {
+		if _, ok := f.ByAddr[address]; !ok {
+			return nil, stores.ErrAccountNotFound
+		}
+		return f.ByAddr[address], nil
 	}
 	return nil, stores.ErrAccountNotFound
 }

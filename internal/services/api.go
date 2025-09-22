@@ -16,14 +16,14 @@ import (
 
 type Api struct {
 	server    *http.Server
-	keys      stores.KeyStore
-	accounts  stores.AccountStore
+	keys      stores.IKeyStore
+	accounts  stores.IAccountStore
 	srcChains []string
 	dstChains []string
 	assets    []string
 }
 
-func NewApi(ks stores.KeyStore, as stores.AccountStore, srcChains []string, dstChains []string, assets []string) *Api {
+func NewApi(ks stores.IKeyStore, as stores.IAccountStore, srcChains []string, dstChains []string, assets []string) *Api {
 	a := &Api{
 		keys:      ks,
 		accounts:  as,

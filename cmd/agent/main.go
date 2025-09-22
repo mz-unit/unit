@@ -61,12 +61,12 @@ func main() {
 	if err != nil {
 		log.Fatalf("failed to parse private key: %v", err)
 	}
-	hlClient := clients.NewHyperliquidClient("https://api.hyperliquid-testnet.xyz")
+	hlClient := clients.NewHttpClient("https://api.hyperliquid-testnet.xyz")
 
-	wm := services.NewWalletManager(ks, map[models.Chain]*ethclient.Client{
+	c := services.NewChainProvider(ks, map[models.Chain]*ethclient.Client{
 		models.Ethereum: ethClient,
 	}, hlInfo, privateKey, hlClient)
-	sm, err := services.NewStateMachine(wm, as, st, map[models.Chain]string{
+	sm, err := services.NewStateMachine(c, as, st, map[models.Chain]string{
 		models.Ethereum:    hotWalletAddr,
 		models.Hyperliquid: hotWalletAddr,
 	})

@@ -10,33 +10,27 @@ import (
 	"time"
 )
 
-type TransferResponse struct {
-	Status string `json:"status"`
-	TxHash string `json:"txHash,omitempty"`
-	Error  string `json:"error,omitempty"`
+type HttpClient struct {
+	BaseURL    string
+	HttpClient *http.Client
 }
 
-type HyperliquidClient struct {
-	baseURL    string
-	httpClient *http.Client
-}
-
-func NewHyperliquidClient(baseURL string) *HyperliquidClient {
-	return &HyperliquidClient{
-		baseURL: baseURL,
-		httpClient: &http.Client{
+func NewHttpClient(baseURL string) *HttpClient {
+	return &HttpClient{
+		BaseURL: baseURL,
+		HttpClient: &http.Client{
 			Timeout: 10 * time.Second,
 		},
 	}
 }
 
-func (c *HyperliquidClient) Post(ctx context.Context, path string, payload any) ([]byte, error) {
+func (c *HttpClient) Post(ctx context.Context, path string, payload any) ([]byte, error) {
 	jsonData, err := json.Marshal(payload)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal payload: %w", err)
 	}
 
-	url := c.baseURL + path
+	url := c.BaseURL + path
 	req, err := http.NewRequestWithContext(
 		ctx,
 		http.MethodPost,
@@ -49,7 +43,7 @@ func (c *HyperliquidClient) Post(ctx context.Context, path string, payload any) 
 
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.HttpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}

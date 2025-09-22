@@ -14,9 +14,9 @@ import (
 )
 
 type StateMachine struct {
-	wm       *WalletManager
-	accounts stores.AccountStore
-	states   stores.StateStore
+	provider IChainProvider
+	accounts stores.IAccountStore
+	states   stores.IStateStore
 
 	hotWallets       map[models.Chain]string
 	interval         time.Duration
@@ -25,9 +25,9 @@ type StateMachine struct {
 	maxAttempts      int
 }
 
-func NewStateMachine(wm *WalletManager, as stores.AccountStore, ss stores.StateStore, hotWallets map[models.Chain]string) (*StateMachine, error) {
+func NewStateMachine(c *ChainProvider, as stores.IAccountStore, ss stores.IStateStore, hotWallets map[models.Chain]string) (*StateMachine, error) {
 	sm := &StateMachine{
-		wm:               wm,
+		provider:         c,
 		accounts:         as,
 		states:           ss,
 		hotWallets:       hotWallets,
@@ -157,7 +157,7 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 	switch st.State {
 
 	case models.StateSrcTxDiscovered:
-		confirmed, err := sm.wm.WithChain(st.SrcChain).IsTxConfirmed(ctx, st.TxHash, sm.minConfirmations)
+		confirmed, err := sm.provider.WithChain(st.SrcChain).IsTxConfirmed(ctx, st.TxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateFailed
@@ -177,7 +177,7 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		if err != nil {
 			return st.State, false, err
 		}
-		tx, err := sm.wm.WithChain(st.DstChain).BuildSendTx(ctx, addr, st.DstAddr.Hex(), st.AmountWei)
+		tx, err := sm.provider.WithChain(st.DstChain).BuildSendTx(ctx, addr, st.DstAddr.Hex(), st.AmountWei)
 		if err != nil {
 			return st.State, false, fmt.Errorf("error building tx: %v", err)
 		}
@@ -190,7 +190,7 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		if err != nil {
 			return st.State, false, err
 		}
-		hash, err := sm.wm.WithChain(st.DstChain).BroadcastTx(ctx, st.UnsignedDstTx, addr)
+		hash, err := sm.provider.WithChain(st.DstChain).BroadcastTx(ctx, st.UnsignedDstTx, addr)
 		if err != nil {
 			return st.State, false, fmt.Errorf("error sending tx: %v", err)
 		}
@@ -199,7 +199,7 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		return st.State, true, nil
 
 	case models.StateDstTxSent:
-		confirmed, err := sm.wm.WithChain(st.DstChain).IsTxConfirmed(ctx, st.SentDstTxHash, sm.minConfirmations)
+		confirmed, err := sm.provider.WithChain(st.DstChain).IsTxConfirmed(ctx, st.SentDstTxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateDstTxRejected
@@ -219,7 +219,7 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		if err != nil {
 			return st.State, false, err
 		}
-		tx, err := sm.wm.WithChain(st.SrcChain).BuildSweepTx(ctx, st.DepositAddr.Hex(), addr)
+		tx, err := sm.provider.WithChain(st.SrcChain).BuildSweepTx(ctx, st.DepositAddr.Hex(), addr)
 		if err != nil {
 			return st.State, false, err
 		}
@@ -228,7 +228,7 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		return st.State, true, nil
 
 	case models.StateSweepTxBuilt:
-		hash, err := sm.wm.WithChain(st.SrcChain).BroadcastTx(ctx, st.UnsignedSweepTx, st.DepositAddr.Hex())
+		hash, err := sm.provider.WithChain(st.SrcChain).BroadcastTx(ctx, st.UnsignedSweepTx, st.DepositAddr.Hex())
 		if err != nil {
 			return st.State, false, fmt.Errorf("error sending tx: %v", err)
 		}
@@ -237,7 +237,7 @@ func (sm *StateMachine) TransitionDeposit(ctx context.Context, st *models.Deposi
 		return st.State, true, nil
 
 	case models.StateSweepTxSent:
-		confirmed, err := sm.wm.WithChain(st.SrcChain).IsTxConfirmed(ctx, st.SentSweepTxHash, sm.minConfirmations)
+		confirmed, err := sm.provider.WithChain(st.SrcChain).IsTxConfirmed(ctx, st.SentSweepTxHash, sm.minConfirmations)
 		if err != nil {
 			if errors.Is(err, ErrorRejectedTransaction) {
 				st.State = models.StateSweepTxRejected

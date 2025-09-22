@@ -57,7 +57,7 @@ import (
 // 	return nil, errors.New("not implemented")
 // }
 
-func newAPIForTest(ks stores.KeyStore, as stores.AccountStore) *Api {
+func newAPIForTest(ks stores.IKeyStore, as stores.IAccountStore) *Api {
 	src := []string{"ethereum"}
 	dst := []string{"hyperliquid"}
 	assets := []string{"usdc"}
