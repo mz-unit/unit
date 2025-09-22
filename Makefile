@@ -1,7 +1,7 @@
 test:
 	go test $$(go list ./... | grep -v /constants$$ | grep -v /mocks$$) -coverprofile .testCoverage.txt
 
-init:
+setup:
 	go run ./cmd/init/main.go
 
 teardown:

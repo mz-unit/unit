@@ -1,6 +1,8 @@
+## Design
+
 ## Run locally
-1. Create .env file following .env.example. This program requires a funded hot wallet to credit deposits, please do not use a sensitive wallet. Wallet should be holding USDC on Hyperliquid testnet.
-2. Run `make init` to import environment's private key into local key store.
+1. Create .env file following .env.example. This program requires a funded hot wallet in order to credit deposits, please do not use a sensitive wallet. Wallet should be holding USDC on Hyperliquid testnet.
+2. Run `make setup` to import environment's private key into local key store.
 3. Start agent by running `make start`. This will start the API server, block publisher, and state machine.
 5. Clean up by running `make teardown`. This will delete all persisted data (deposit addresses, workflow states, keys).
 
@@ -17,8 +19,6 @@ This will generate a deposit address for a sepolia -> hyperliquid deposit
 3. Once the transaction has required confirmations (14), agent will credit the deposit on Hyperliquid (0.01 ETH = 10 USDC)
 4. Once destination deposit ransaction is confirmed, agent submits transaction to sweep funds out of deposit address. The funds go back to the provided `HOT_WALLET_ADDRESS`.
 5. On sweep transaction finalization, deposit workflow is marked as done.
-
-
 
 ## Limitations
 - The block publisher does not persist its last seen block. This means if the service is stopped and restarted, we will only start again from the current head. To address this we can introduce periodic checkpointing to recover gracefully.

@@ -15,48 +15,6 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 )
 
-// type mocks.MockKeyStore struct {
-// 	addr   string
-// 	err    error
-// 	called int
-// }
-
-// func (f *mocks.MockKeyStore) CreateKey(ctx context.Context) (string, error) {
-// 	f.called++
-// 	return f.addr, f.err
-// }
-// func (f *mocks.MockKeyStore) HasKey(ctx context.Context, addr string) bool {
-// 	return addr == f.addr
-// }
-// func (f *mocks.MockKeyStore) SignTx(ctx context.Context, address string, tx *types.Transaction, chainID *big.Int) (*types.Transaction, error) {
-// 	return nil, errors.New("not implemented")
-// }
-
-// type mocks.MockAccountStore struct {
-// 	getFn     func(ctx context.Context, id string) (*models.Account, error)
-// 	insertFn  func(ctx context.Context, a models.Account) error
-// 	inserted  *models.Account
-// 	insertErr error
-// }
-
-// func (f *mocks.MockAccountStore) Get(ctx context.Context, id string) (*models.Account, error) {
-// 	if f.getFn != nil {
-// 		return f.getFn(ctx, id)
-// 	}
-// 	return nil, stores.ErrAccountNotFound
-// }
-
-// func (f *mocks.MockAccountStore) Insert(ctx context.Context, a models.Account) error {
-// 	f.inserted = &a
-// 	if f.insertFn != nil {
-// 		return f.insertFn(ctx, a)
-// 	}
-// 	return f.insertErr
-// }
-// func (f *mocks.MockAccountStore) GetByDepositAddress(ctx context.Context, address string) (*models.Account, error) {
-// 	return nil, errors.New("not implemented")
-// }
-
 func newAPIForTest(ks stores.IKeyStore, as stores.IAccountStore) *Api {
 	src := []string{"ethereum"}
 	dst := []string{"hyperliquid"}
