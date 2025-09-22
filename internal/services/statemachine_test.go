@@ -107,7 +107,7 @@ func (f *mockStateStore) Close() error { return nil }
 type mockTrieHasher struct{}
 
 func (*mockTrieHasher) Hash() common.Hash           { return common.Hash{} }
-func (*mockTrieHasher) Reset()                      { return }
+func (*mockTrieHasher) Reset()                      {}
 func (*mockTrieHasher) Update([]byte, []byte) error { return nil }
 
 func newStateMachineForTest(t *testing.T, provider *mockChainProvider) *StateMachine {
