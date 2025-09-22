@@ -1,4 +1,4 @@
 .env
 tmp/
 tmptest/
-.testCoverage.txt
+coverage.out

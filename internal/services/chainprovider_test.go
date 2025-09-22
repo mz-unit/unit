@@ -35,6 +35,10 @@ func createPrivateKey(t *testing.T) *ecdsa.PrivateKey {
 	return k
 }
 
+func mkHLClient(ts *httptest.Server) *clients.HttpClient {
+	return &clients.HttpClient{BaseURL: ts.URL, HttpClient: ts.Client()}
+}
+
 func TestChainProvider_WithChain_ReturnsCorrectCtx(t *testing.T) {
 	wm := NewChainProvider(&mocks.MockKeyStore{HasKeyResp: true}, map[models.Chain]*ethclient.Client{
 		models.Ethereum: nil,
@@ -170,5 +174,57 @@ func TestHlCtx_BroadcastTx_SendsToExchangeAndReturnsHash(t *testing.T) {
 	}
 	if hash != "0xabc123" {
 		t.Fatalf("hash = %s, want 0xabc123", hash)
+	}
+}
+
+func TestHlCtx_BroadcastTx_BadJSON(t *testing.T) {
+	h := &HlCtx{
+		wm:        &ChainProvider{},
+		hlPrivKey: createPrivateKey(t),
+		hlClient:  &clients.HttpClient{},
+	}
+	_, err := h.BroadcastTx(context.Background(), "{not-json", "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	if err == nil || err.Error() == "" {
+		t.Fatalf("expected JSON unmarshal error, got %v", err)
+	}
+}
+
+func TestHlCtx_IsTxConfirmed_ReturnsTrueA(t *testing.T) {
+	h := &HlCtx{}
+	ok, err := h.IsTxConfirmed(context.Background(), "0xabc", 0)
+	if err != nil {
+		t.Fatalf("IsTxConfirmed err: %v", err)
+	}
+	if !ok {
+		t.Fatalf("IsTxConfirmed = false, want true")
+	}
+}
+
+func TestHlCtx_BuildSendTx_Formatting(t *testing.T) {
+	h := &HlCtx{hlPrivKey: createPrivateKey(t), hlClient: &clients.HttpClient{}}
+
+	// 1 ETH -> 1000.000000 USDC (with 6 decimals in string)
+	oneEth := new(big.Int).Exp(big.NewInt(10), big.NewInt(18), nil)
+	raw, err := h.BuildSendTx(context.Background(),
+		"0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"0xBBBBbbbbBBBBbbbbBBBBbbbbBBBBbbbbBBBBbbbb",
+		oneEth,
+	)
+	if err != nil {
+		t.Fatalf("BuildSendTx err: %v", err)
+	}
+
+	var got struct {
+		Amount string `json:"amount"`
+		Token  string `json:"token"`
+	}
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if got.Amount != "1000.000000" {
+		t.Fatalf("amount = %q, want %q", got.Amount, "1000.000000")
+	}
+	if got.Token == "" {
+		t.Fatalf("token empty")
 	}
 }

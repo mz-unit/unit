@@ -325,7 +325,6 @@ func (c *HlCtx) BuildSweepTx(ctx context.Context, fromAddr string, toAddr string
 
 func (c *HlCtx) IsTxConfirmed(ctx context.Context, txHash string, minConfirmations uint64) (bool, error) {
 	// hyperliquid core has one block finality with block times of 200ms.
-	// for this POC effectively consider transfer finalized after 200ms, for correctess we need a way to get core's block number
-	time.Sleep(200 * time.Millisecond)
+	// for this POC effectively consider transfer finalized, for correctess we need a way to get core's block number
 	return true, nil
 }
